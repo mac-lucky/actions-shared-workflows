@@ -84,10 +84,10 @@ on:
     secrets:
       DOCKER_HUB_USERNAME:
         description: 'Docker Hub username'
-        required: true
+        required: false
       DOCKER_HUB_PASSWORD:
         description: 'Docker Hub password/token'
-        required: true
+        required: false
 
 env:
   REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
