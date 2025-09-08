@@ -94,10 +94,59 @@ env:
   REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
 
 jobs:
-  # Job 1: Extract Go version and setup environment
+  # Job 1: Check for code changes
+  check-changes:
+    name: Check for Code Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code-changed: ${{ steps.changes.outputs.code }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check for code changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "Release event - forcing build"
+            echo "code=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # For push events, check if there are changes to Go code
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Check if previous commit exists
+            if git rev-parse HEAD~1 >/dev/null 2>&1; then
+              # Check for changes in Go-related files
+              CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+              
+              # Look for changes in Go files, go.mod, go.sum, Dockerfile, or src directories
+              if echo "$CHANGED_FILES" | grep -E '\.(go|mod|sum)$|Dockerfile|^(src|cmd|internal|pkg)/' > /dev/null; then
+                echo "Code changes detected:"
+                echo "$CHANGED_FILES" | grep -E '\.(go|mod|sum)$|Dockerfile|^(src|cmd|internal|pkg)/'
+                echo "code=true" >> $GITHUB_OUTPUT
+              else
+                echo "No code changes detected. Only documentation/config changes:"
+                echo "$CHANGED_FILES"
+                echo "code=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "First commit - forcing build"
+              echo "code=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            # For PR events, always run tests but don't push
+            echo "Pull request - running tests only"
+            echo "code=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Job 2: Extract Go version and setup environment
   setup:
     name: Setup Build Environment
     runs-on: ubuntu-latest
+    needs: check-changes
     outputs:
       go-version: ${{ steps.go-version.outputs.version }}
       go-version-matrix: ${{ steps.go-version.outputs.matrix }}
@@ -132,11 +181,11 @@ jobs:
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "Testing with Go versions: $MATRIX"
 
-  # Job 2: Code Quality & Security Analysis
+  # Job 3: Code Quality & Security Analysis
   code-analysis:
     name: Code Quality & Security Analysis
     runs-on: ubuntu-latest
-    needs: setup
+    needs: [check-changes, setup]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -182,11 +231,11 @@ jobs:
           scan-ref: "."
           format: "table"
 
-  # Job 3: Build Container Image
+  # Job 4: Build Container Image
   build-container:
     name: Build Container Image
     runs-on: ubuntu-latest
-    needs: [setup, code-analysis]
+    needs: [check-changes, setup, code-analysis]
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -224,11 +273,11 @@ jobs:
           path: /tmp/${{ inputs.app_name }}.tar.gz
           retention-days: 1
 
-  # Job 4: Container Integration Tests
+  # Job 5: Container Integration Tests
   container-test:
     name: Container Integration Test
     runs-on: ubuntu-latest
-    needs: [setup, build-container]
+    needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_container_tests }}
     steps:
       - name: Checkout code
@@ -275,11 +324,11 @@ jobs:
           exit-code: "0"
           ignore-unfixed: true
 
-  # Job 5: Kubernetes Integration Tests (Optional)
+  # Job 6: Kubernetes Integration Tests (Optional)
   kubernetes-test:
     name: Kubernetes Integration Test
     runs-on: ubuntu-latest
-    needs: [setup, build-container]
+    needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' }}
     steps:
       - name: Checkout code
@@ -392,12 +441,12 @@ jobs:
           helm uninstall $RELEASE_NAME -n monitoring || true
           kubectl delete namespace monitoring || true
 
-  # Job 6: Build and Push Multi-arch Container Images
+  # Job 7: Build and Push Multi-arch Container Images
   build-and-push:
     name: Build & Push Container Images
     runs-on: ubuntu-latest
-    needs: [setup, build-container, container-test, kubernetes-test]
-    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release') && github.ref == 'refs/heads/master' && (always() && (needs.container-test.result == 'success') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success')) }}
+    needs: [check-changes, setup, build-container, container-test, kubernetes-test]
+    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release') && github.ref == 'refs/heads/master' && needs.check-changes.outputs.code-changed == 'true' && (always() && (needs.container-test.result == 'success') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success')) }}
     permissions:
       contents: read
       packages: write
@@ -489,11 +538,11 @@ jobs:
           name: sbom
           path: sbom.spdx.json
 
-  # Job 7: Post-deployment verification
+  # Job 8: Post-deployment verification
   post-deploy-verify:
     name: Post-deployment Verification
     runs-on: ubuntu-latest
-    needs: [build-and-push]
+    needs: [check-changes, build-and-push]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     steps:
       - name: Verify image pull and functionality
