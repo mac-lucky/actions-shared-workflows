@@ -46,6 +46,16 @@ on:
         required: false
         type: string
         default: ''
+      helm_release_name:
+        description: 'Helm release name for deployment'
+        required: false
+        type: string
+        default: ''
+      app_label_selector:
+        description: 'App label selector for Kubernetes pods (e.g., ping-exporter, tcp-endpoint-check-exporter)'
+        required: false
+        type: string
+        default: ''
       
       # Security and quality
       enable_security_scan:
@@ -313,7 +323,12 @@ jobs:
 
       - name: Deploy application with Helm
         run: |
-          helm upgrade --install ${{ inputs.app_name }} ${{ inputs.helm_chart_path }} \
+          RELEASE_NAME="${{ inputs.helm_release_name }}"
+          if [ -z "$RELEASE_NAME" ]; then
+            RELEASE_NAME="${{ inputs.app_name }}"
+          fi
+          
+          helm upgrade --install $RELEASE_NAME ${{ inputs.helm_chart_path }} \
             --namespace monitoring \
             --set image.tag=test \
             --set image.repository=${{ inputs.app_name }} \
@@ -323,38 +338,58 @@ jobs:
 
       - name: Verify deployment
         run: |
+          APP_LABEL="${{ inputs.app_label_selector }}"
+          if [ -z "$APP_LABEL" ]; then
+            APP_LABEL="${{ inputs.app_name }}"
+          fi
+          
           echo "=== Checking deployment status ==="
-          kubectl get pods -n monitoring -l app=${{ inputs.app_name }} -o wide
+          kubectl get pods -n monitoring -l app=$APP_LABEL -o wide
           kubectl get services -n monitoring
           kubectl get configmap -n monitoring
 
       - name: Wait for pods to be ready
         run: |
-          kubectl wait --for=condition=ready pod -l app=${{ inputs.app_name }} \
+          APP_LABEL="${{ inputs.app_label_selector }}"
+          if [ -z "$APP_LABEL" ]; then
+            APP_LABEL="${{ inputs.app_name }}"
+          fi
+          
+          kubectl wait --for=condition=ready pod -l app=$APP_LABEL \
             -n monitoring --timeout=120s
 
       - name: Health check
         run: |
+          APP_LABEL="${{ inputs.app_label_selector }}"
+          if [ -z "$APP_LABEL" ]; then
+            APP_LABEL="${{ inputs.app_name }}"
+          fi
+          
           echo "=== Health check ==="
           # Check if all pods are running
-          READY_PODS=$(kubectl get pods -n monitoring -l app=${{ inputs.app_name }} \
+          READY_PODS=$(kubectl get pods -n monitoring -l app=$APP_LABEL \
             -o jsonpath='{.items[*].status.phase}' | grep -o Running | wc -l)
           TOTAL_PODS=$(kubectl get pods -n monitoring \
-            -l app=${{ inputs.app_name }} --no-headers | wc -l)
+            -l app=$APP_LABEL --no-headers | wc -l)
           echo "Ready pods: $READY_PODS / $TOTAL_PODS"
           if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && \
              [ "$TOTAL_PODS" -gt 0 ]; then
             echo "✅ All pods are running successfully"
           else
             echo "❌ Not all pods are running"
-            kubectl describe pods -n monitoring -l app=${{ inputs.app_name }}
+            kubectl describe pods -n monitoring -l app=$APP_LABEL
             exit 1
           fi
 
       - name: Cleanup
         if: always()
         run: |
-          helm uninstall ${{ inputs.app_name }} -n monitoring || true
+          RELEASE_NAME="${{ inputs.helm_release_name }}"
+          if [ -z "$RELEASE_NAME" ]; then
+            RELEASE_NAME="${{ inputs.app_name }}"
+          fi
+          
+          helm uninstall $RELEASE_NAME -n monitoring || true
           kubectl delete namespace monitoring || true
 
   # Job 6: Build and Push Multi-arch Container Images
@@ -362,7 +397,7 @@ jobs:
     name: Build & Push Container Images
     runs-on: ubuntu-latest
     needs: [setup, build-container, container-test]
-    if: ${{ (github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' }}
+    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release') && github.ref == 'refs/heads/master' }}
     permissions:
       contents: read
       packages: write
