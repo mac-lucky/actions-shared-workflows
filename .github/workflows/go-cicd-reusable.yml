@@ -78,9 +78,6 @@ on:
       DOCKER_HUB_PASSWORD:
         description: 'Docker Hub password/token'
         required: true
-      GITHUB_TOKEN:
-        description: 'GitHub token'
-        required: false
 
 env:
   REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
@@ -393,7 +390,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN || github.token }}
+          password: ${{ github.token }}
 
       - name: Get latest version tag
         if: ${{ inputs.enable_auto_version }}
