@@ -142,14 +142,12 @@ jobs:
             echo "code=false" >> $GITHUB_OUTPUT
           fi
 
-  # Job 2: Extract Go version and setup environment
   setup:
     name: Setup Build Environment
     runs-on: ubuntu-latest
     needs: check-changes
     outputs:
       go-version: ${{ steps.go-version.outputs.version }}
-      go-version-matrix: ${{ steps.go-version.outputs.matrix }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -161,25 +159,8 @@ jobs:
           GO_VERSION=$(grep "^go " go.mod | cut -d' ' -f2)
           echo "Found Go version in go.mod: $GO_VERSION"
 
-          # Set primary version for builds
+          # Set version for builds
           echo "version=$GO_VERSION" >> $GITHUB_OUTPUT
-
-          # Create matrix for testing (current version + previous)
-          # Extract major.minor and create previous version for testing
-          MAJOR_MINOR=$(echo $GO_VERSION | cut -d'.' -f1,2)
-          PREV_VERSION="$MAJOR_MINOR"
-
-          # For Go 1.23, test with 1.22 as well
-          if [[ $MAJOR_MINOR == "1.23" ]]; then
-            PREV_VERSION="1.22"
-          elif [[ $MAJOR_MINOR == "1.22" ]]; then
-            PREV_VERSION="1.21"
-          fi
-
-          # Create JSON array for matrix
-          MATRIX="[\"$PREV_VERSION\", \"$GO_VERSION\"]"
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "Testing with Go versions: $MATRIX"
 
   # Job 3: Code Quality & Security Analysis
   code-analysis:
