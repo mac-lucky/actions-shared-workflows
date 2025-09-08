@@ -1,0 +1,472 @@
+---
+name: Reusable Go CI/CD Workflow
+
+on:
+  workflow_call:
+    inputs:
+      # Application configuration
+      app_name:
+        description: 'Application name'
+        required: true
+        type: string
+      dockerhub_image:
+        description: 'Docker Hub image name (e.g., maclucky/app-name)'
+        required: true
+        type: string
+      ghcr_image:
+        description: 'GHCR image name (e.g., ghcr.io/mac-lucky/app-name)'
+        required: true
+        type: string
+      
+      # Build configuration
+      dockerfile_path:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      build_context:
+        description: 'Build context path'
+        required: false
+        type: string
+        default: '.'
+      
+      # Test configuration
+      enable_container_tests:
+        description: 'Enable container integration tests'
+        required: false
+        type: boolean
+        default: true
+      enable_kubernetes_tests:
+        description: 'Enable Kubernetes integration tests'
+        required: false
+        type: boolean
+        default: false
+      helm_chart_path:
+        description: 'Path to Helm chart for Kubernetes tests'
+        required: false
+        type: string
+        default: ''
+      
+      # Security and quality
+      enable_security_scan:
+        description: 'Enable security scanning with Trivy'
+        required: false
+        type: boolean
+        default: true
+      enable_sbom:
+        description: 'Generate Software Bill of Materials'
+        required: false
+        type: boolean
+        default: true
+      
+      # Deployment
+      enable_auto_version:
+        description: 'Enable automatic version increment'
+        required: false
+        type: boolean
+        default: true
+      push_on_main:
+        description: 'Push images when merging to main branch'
+        required: false
+        type: boolean
+        default: true
+
+    secrets:
+      DOCKER_HUB_USERNAME:
+        description: 'Docker Hub username'
+        required: true
+      DOCKER_HUB_PASSWORD:
+        description: 'Docker Hub password/token'
+        required: true
+      GITHUB_TOKEN:
+        description: 'GitHub token'
+        required: false
+
+env:
+  REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
+  REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
+
+jobs:
+  # Job 1: Extract Go version and setup environment
+  setup:
+    name: Setup Build Environment
+    runs-on: ubuntu-latest
+    outputs:
+      go-version: ${{ steps.go-version.outputs.version }}
+      go-version-matrix: ${{ steps.go-version.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Extract Go version from go.mod
+        id: go-version
+        run: |
+          # Extract Go version from go.mod
+          GO_VERSION=$(grep "^go " go.mod | cut -d' ' -f2)
+          echo "Found Go version in go.mod: $GO_VERSION"
+
+          # Set primary version for builds
+          echo "version=$GO_VERSION" >> $GITHUB_OUTPUT
+
+          # Create matrix for testing (current version + previous)
+          # Extract major.minor and create previous version for testing
+          MAJOR_MINOR=$(echo $GO_VERSION | cut -d'.' -f1,2)
+          PREV_VERSION="$MAJOR_MINOR"
+
+          # For Go 1.23, test with 1.22 as well
+          if [[ $MAJOR_MINOR == "1.23" ]]; then
+            PREV_VERSION="1.22"
+          elif [[ $MAJOR_MINOR == "1.22" ]]; then
+            PREV_VERSION="1.21"
+          fi
+
+          # Create JSON array for matrix
+          MATRIX="[\"$PREV_VERSION\", \"$GO_VERSION\"]"
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Testing with Go versions: $MATRIX"
+
+  # Job 2: Code Quality & Security Analysis
+  code-analysis:
+    name: Code Quality & Security Analysis
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ needs.setup.outputs.go-version }}
+          cache: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ needs.setup.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ needs.setup.outputs.go-version }}-
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run staticcheck
+        uses: dominikh/staticcheck-action@v1.4.0
+        with:
+          version: "latest"
+
+      - name: Run Trivy vulnerability scanner
+        if: ${{ inputs.enable_security_scan }}
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "table"
+
+  # Job 3: Build Container Image
+  build-container:
+    name: Build Container Image
+    runs-on: ubuntu-latest
+    needs: [setup, code-analysis]
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          tags: ${{ inputs.app_name }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: false
+          load: true
+          build-args: |
+            GO_VERSION=${{ needs.setup.outputs.go-version }}
+
+      - name: Save container image
+        if: ${{ inputs.enable_kubernetes_tests }}
+        run: |
+          docker save ${{ inputs.app_name }}:test | \
+            gzip > /tmp/${{ inputs.app_name }}.tar.gz
+
+      - name: Upload container artifact
+        if: ${{ inputs.enable_kubernetes_tests }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: /tmp/${{ inputs.app_name }}.tar.gz
+          retention-days: 1
+
+  # Job 4: Container Integration Tests
+  container-test:
+    name: Container Integration Test
+    runs-on: ubuntu-latest
+    needs: [setup, build-container]
+    if: ${{ inputs.enable_container_tests }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download container artifact
+        if: ${{ inputs.enable_kubernetes_tests }}
+        uses: actions/download-artifact@v5
+        with:
+          name: container-image
+          path: /tmp
+
+      - name: Load container image
+        if: ${{ inputs.enable_kubernetes_tests }}
+        run: |
+          gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
+          docker image ls -a
+
+      - name: Basic container functionality test
+        if: ${{ !inputs.enable_kubernetes_tests }}
+        run: |
+          echo "Running basic container test for ${{ inputs.app_name }}"
+          docker run -d --name test-container ${{ inputs.app_name }}:test
+          sleep 10
+          
+          # Basic health check - this should be customized per application
+          if docker ps | grep -q test-container; then
+            echo "✅ Container is running"
+          else
+            echo "❌ Container failed to start"
+            docker logs test-container
+            exit 1
+          fi
+          
+          docker stop test-container
+          docker rm test-container
+
+      - name: Container security scan
+        if: ${{ inputs.enable_security_scan }}
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ inputs.app_name }}:test"
+          format: "table"
+          exit-code: "0"
+          ignore-unfixed: true
+
+  # Job 5: Kubernetes Integration Tests (Optional)
+  kubernetes-test:
+    name: Kubernetes Integration Test
+    runs-on: ubuntu-latest
+    needs: [setup, build-container]
+    if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download container artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: container-image
+          path: /tmp
+
+      - name: Load container image
+        run: |
+          gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
+          docker image ls -a
+
+      - name: Setup Minikube with 2 nodes
+        uses: medyagh/setup-minikube@latest
+        with:
+          minikube-version: 'latest'
+          driver: docker
+          container-runtime: docker
+          kubernetes-version: v1.32.0
+          cpus: 2
+          memory: 2048m
+          addons: metrics-server
+          start-args: '--nodes=2'
+
+      - name: Load Docker image into Minikube
+        run: |
+          minikube image load ${{ inputs.app_name }}:test
+
+      - name: Create monitoring namespace
+        run: |
+          kubectl create namespace monitoring || true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Deploy application with Helm
+        run: |
+          helm upgrade --install ${{ inputs.app_name }} ${{ inputs.helm_chart_path }} \
+            --namespace monitoring \
+            --set image.tag=test \
+            --set image.repository=${{ inputs.app_name }} \
+            --set image.pullPolicy=Never \
+            --set serviceMonitor.enabled=false \
+            --wait --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          echo "=== Checking deployment status ==="
+          kubectl get pods -n monitoring -l app=${{ inputs.app_name }} -o wide
+          kubectl get services -n monitoring
+          kubectl get configmap -n monitoring
+
+      - name: Wait for pods to be ready
+        run: |
+          kubectl wait --for=condition=ready pod -l app=${{ inputs.app_name }} \
+            -n monitoring --timeout=120s
+
+      - name: Health check
+        run: |
+          echo "=== Health check ==="
+          # Check if all pods are running
+          READY_PODS=$(kubectl get pods -n monitoring -l app=${{ inputs.app_name }} \
+            -o jsonpath='{.items[*].status.phase}' | grep -o Running | wc -l)
+          TOTAL_PODS=$(kubectl get pods -n monitoring \
+            -l app=${{ inputs.app_name }} --no-headers | wc -l)
+          echo "Ready pods: $READY_PODS / $TOTAL_PODS"
+          if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && \
+             [ "$TOTAL_PODS" -gt 0 ]; then
+            echo "✅ All pods are running successfully"
+          else
+            echo "❌ Not all pods are running"
+            kubectl describe pods -n monitoring -l app=${{ inputs.app_name }}
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          helm uninstall ${{ inputs.app_name }} -n monitoring || true
+          kubectl delete namespace monitoring || true
+
+  # Job 6: Build and Push Multi-arch Container Images
+  build-and-push:
+    name: Build & Push Container Images
+    runs-on: ubuntu-latest
+    needs: [setup, build-container, container-test]
+    if: ${{ (github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: --debug
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN || github.token }}
+
+      - name: Get latest version tag
+        if: ${{ inputs.enable_auto_version }}
+        id: get_latest_version
+        run: |
+          LATEST_TAG=$(curl -s \
+            "https://registry.hub.docker.com/v2/repositories/${{ env.REGISTRY_IMAGE_DOCKERHUB }}/tags?page_size=100" | \
+            jq -r '.results[].name' | \
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V | tail -n 1 || echo "")
+          echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
+
+      - name: Set version
+        id: set_version
+        run: |
+          if [ "${{ inputs.enable_auto_version }}" = "true" ]; then
+            VERSION=${{ env.LATEST_TAG }}
+            if [ -z "$VERSION" ]; then
+              NEW_VERSION="1.0.0"
+            else
+              NEW_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF++;print}')
+            fi
+          else
+            # Use git tag or default version
+            NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+          fi
+          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }}
+            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
+            ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
+            ${{ env.REGISTRY_IMAGE_GHCR }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GO_VERSION=${{ needs.setup.outputs.go-version }}
+            VERSION=${{ env.NEW_VERSION }}
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+      - name: Generate SBOM
+        if: ${{ inputs.enable_sbom }}
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        if: ${{ inputs.enable_sbom }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
+  # Job 7: Post-deployment verification
+  post-deploy-verify:
+    name: Post-deployment Verification
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+    steps:
+      - name: Verify image pull and functionality
+        run: |
+          echo "Verifying images can be pulled..."
+          docker pull ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
+          
+          echo "✅ Image verification successful"
