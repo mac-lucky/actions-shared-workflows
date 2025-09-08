@@ -396,8 +396,8 @@ jobs:
   build-and-push:
     name: Build & Push Container Images
     runs-on: ubuntu-latest
-    needs: [setup, build-container, container-test]
-    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release') && github.ref == 'refs/heads/master' }}
+    needs: [setup, build-container, container-test, kubernetes-test]
+    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release') && github.ref == 'refs/heads/master' && (always() && (needs.container-test.result == 'success') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success')) }}
     permissions:
       contents: read
       packages: write
