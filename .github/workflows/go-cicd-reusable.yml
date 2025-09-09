@@ -84,10 +84,10 @@ on:
     secrets:
       DOCKER_HUB_USERNAME:
         description: 'Docker Hub username'
-        required: false
+        required: true
       DOCKER_HUB_PASSWORD:
         description: 'Docker Hub password/token'
-        required: false
+        required: true
 
 env:
   REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
@@ -447,11 +447,6 @@ jobs:
             echo "❌ DOCKER_HUB_USERNAME is empty or not set"
           else
             echo "✅ DOCKER_HUB_USERNAME is available (length: ${#{{ secrets.DOCKER_HUB_USERNAME }}})"
-          fi
-          if [ -z "${{ secrets.DOCKER_HUB_PASSWORD }}" ]; then
-            echo "❌ DOCKER_HUB_PASSWORD is empty or not set"
-          else
-            echo "✅ DOCKER_HUB_PASSWORD is available"
           fi
 
       - name: Log in to Docker Hub
