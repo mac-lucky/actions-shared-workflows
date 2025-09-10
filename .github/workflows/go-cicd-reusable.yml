@@ -3,13 +3,6 @@ name: Reusable Go CI/CD Workflow
 
 on:
   workflow_call:
-    secrets:
-      DOCKER_HUB_USERNAME:
-        description: 'Docker Hub username'
-        required: true
-      DOCKER_HUB_PASSWORD:
-        description: 'Docker Hub password/token'
-        required: true
     inputs:
       # Application configuration
       app_name:
