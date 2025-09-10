@@ -6,10 +6,10 @@ on:
     secrets:
       DOCKER_HUB_USERNAME:
         description: 'Docker Hub username'
-        required: false
+        required: true
       DOCKER_HUB_PASSWORD:
         description: 'Docker Hub password/token'
-        required: false
+        required: true
     inputs:
       # Application configuration
       app_name:
