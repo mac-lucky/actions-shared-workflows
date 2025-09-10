@@ -93,26 +93,6 @@ env:
   REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
 
 jobs:
-
-  check-secrets:
-    name: Check Docker Hub Secrets
-    runs-on: ubuntu-latest
-    steps:
-      - name: Debug Docker Hub secrets
-        run: |
-          if [ -z "${{ secrets.DOCKER_HUB_USERNAME }}" ]; then
-            echo "❌ DOCKER_HUB_USERNAME is empty or not set"
-            exit 1
-          else
-            echo "✅ DOCKER_HUB_USERNAME is available (length: ${#{{ secrets.DOCKER_HUB_USERNAME }}})"
-          fi
-          
-          if [ -z "${{ secrets.DOCKER_HUB_PASSWORD }}" ]; then
-            echo "❌ DOCKER_HUB_PASSWORD is empty or not set"
-            exit 1
-          else
-            echo "✅ DOCKER_HUB_PASSWORD is available (length: ${#{{ secrets.DOCKER_HUB_PASSWORD }}})"
-          fi
   # Job 1: Check for code changes
   check-changes:
     name: Check for Code Changes
