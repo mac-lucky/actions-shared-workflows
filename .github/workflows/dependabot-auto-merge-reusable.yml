@@ -62,8 +62,6 @@ on:
         type: string
         default: 'deps,ci,docker'
 
-    secrets:
-
 permissions:
   contents: write
   pull-requests: write
