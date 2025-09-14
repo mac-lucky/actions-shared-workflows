@@ -73,7 +73,7 @@ jobs:
   auto-merge:
     name: Auto-merge Dependabot PRs
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]' && github.event_name == 'pull_request'
+    if: (github.actor == 'dependabot[bot]' && github.event_name == 'pull_request') || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -83,8 +83,26 @@ jobs:
       - name: Get PR details
         id: pr-details
         run: |
-          echo "title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
-          echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+            echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
+            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "head_sha=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+          else
+            # For manual triggers, find the latest Dependabot PR
+            PR_DATA=$(gh pr list --author="dependabot[bot]" --state=open --json=number,title,headRefOid,author --limit=1)
+            if [[ "$PR_DATA" != "[]" ]]; then
+              echo "title=$(echo "$PR_DATA" | jq -r '.[0].title')" >> $GITHUB_OUTPUT
+              echo "author=$(echo "$PR_DATA" | jq -r '.[0].author.login')" >> $GITHUB_OUTPUT
+              echo "pr_number=$(echo "$PR_DATA" | jq -r '.[0].number')" >> $GITHUB_OUTPUT
+              echo "head_sha=$(echo "$PR_DATA" | jq -r '.[0].headRefOid')" >> $GITHUB_OUTPUT
+            else
+              echo "No Dependabot PRs found"
+              exit 1
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Wait for code analysis checks
         uses: fountainhead/action-wait-for-check@v1.2.0
@@ -92,7 +110,7 @@ jobs:
         with:
           token: ${{ github.token }}
           checkName: ${{ inputs.code_analysis_check_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr-details.outputs.head_sha }}
           timeoutSeconds: 1800
           intervalSeconds: 30
 
@@ -103,7 +121,7 @@ jobs:
         with:
           token: ${{ github.token }}
           checkName: ${{ inputs.container_test_check_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr-details.outputs.head_sha }}
           timeoutSeconds: 1800
           intervalSeconds: 30
 
@@ -114,14 +132,14 @@ jobs:
         with:
           token: ${{ github.token }}
           checkName: ${{ inputs.kubernetes_test_check_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr-details.outputs.head_sha }}
           timeoutSeconds: 1800
           intervalSeconds: 30
 
       - name: Check if auto-merge is allowed
         id: check-auto-merge
         run: |
-          TITLE="${{ github.event.pull_request.title }}"
+          TITLE="${{ steps.pr-details.outputs.title }}"
           ALLOW_MERGE=false
           
           # Check for update types
@@ -158,7 +176,7 @@ jobs:
           steps.wait-for-code-analysis.outputs.conclusion == 'success' &&
           (inputs.container_test_check_name == '' || steps.wait-for-container-test.outputs.conclusion == 'success') &&
           (inputs.kubernetes_test_check_name == '' || steps.wait-for-kubernetes-test.outputs.conclusion == 'success') &&
-          github.actor == 'dependabot[bot]'
+          (github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch')
         run: |
           MERGE_FLAG=""
           case "${{ inputs.merge_method }}" in
@@ -178,18 +196,18 @@ jobs:
             DELETE_FLAG="--delete-branch"
           fi
           
-          gh pr merge --auto $MERGE_FLAG $DELETE_FLAG "${{ github.event.pull_request.number }}" || {
+          gh pr merge --auto $MERGE_FLAG $DELETE_FLAG "${{ steps.pr-details.outputs.pr_number }}" || {
             echo "Failed to enable auto-merge, attempting direct merge since CI passed"
-            gh pr merge $MERGE_FLAG $DELETE_FLAG "${{ github.event.pull_request.number }}"
+            gh pr merge $MERGE_FLAG $DELETE_FLAG "${{ steps.pr-details.outputs.pr_number }}"
           }
-          echo "✅ Merged Dependabot PR: ${{ github.event.pull_request.title }}"
+          echo "✅ Merged Dependabot PR: ${{ steps.pr-details.outputs.title }}"
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Comment on major updates
         if: |
-          github.actor == 'dependabot[bot]' &&
-          (contains(github.event.pull_request.title, 'major') || contains(github.event.pull_request.title, 'Major')) &&
+          (github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch') &&
+          (contains(steps.pr-details.outputs.title, 'major') || contains(steps.pr-details.outputs.title, 'Major')) &&
           inputs.allow_major == false &&
           (
             steps.wait-for-code-analysis.outputs.conclusion != 'success' ||
@@ -197,13 +215,13 @@ jobs:
             (inputs.kubernetes_test_check_name != '' && steps.wait-for-kubernetes-test.outputs.conclusion != 'success')
           )
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body "⚠️ This is a **major version update** that requires manual review. Please test thoroughly before merging."
+          gh pr comment "${{ steps.pr-details.outputs.pr_number }}" --body "⚠️ This is a **major version update** that requires manual review. Please test thoroughly before merging."
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Comment on failed checks
         if: |
-          github.actor == 'dependabot[bot]' &&
+          (github.actor == 'dependabot[bot]' || github.event_name == 'workflow_dispatch') &&
           steps.check-auto-merge.outputs.allow_merge == 'true' &&
           (
             steps.wait-for-code-analysis.outputs.conclusion != 'success' ||
@@ -211,6 +229,6 @@ jobs:
             (inputs.kubernetes_test_check_name != '' && steps.wait-for-kubernetes-test.outputs.conclusion != 'success')
           )
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body "❌ Auto-merge blocked due to failed CI checks. Please review and fix the issues."
+          gh pr comment "${{ steps.pr-details.outputs.pr_number }}" --body "❌ Auto-merge blocked due to failed CI checks. Please review and fix the issues."
         env:
           GITHUB_TOKEN: ${{ github.token }}
