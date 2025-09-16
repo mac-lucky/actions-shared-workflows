@@ -131,11 +131,15 @@ jobs:
           # Check Docker Hub
           if [[ "${{ inputs.registry_to_check }}" == "dockerhub" || "${{ inputs.registry_to_check }}" == "both" ]]; then
             echo "Checking Docker Hub for existing image..."
-            DOCKERHUB_TAG=$(curl -s "https://registry.hub.docker.com/v2/repositories/${{ inputs.dockerhub_image }}/tags" | \
-              jq -r '.results[].name' | grep "^$VERSION$" || echo "")
-            if [ -n "$DOCKERHUB_TAG" ]; then
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://registry.hub.docker.com/v2/repositories/${{ inputs.dockerhub_image }}/manifests/$VERSION")
+            echo "Docker Hub HTTP code: $HTTP_CODE"
+            
+            if [ "$HTTP_CODE" -eq 200 ]; then
               echo "Image exists on Docker Hub: ${{ inputs.dockerhub_image }}:$VERSION"
               BUILD_NEEDED=false
+            else
+              echo "Image not found on Docker Hub: ${{ inputs.dockerhub_image }}:$VERSION"
             fi
           fi
           
