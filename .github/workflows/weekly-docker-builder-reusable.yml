@@ -153,12 +153,20 @@ jobs:
             fi
           fi
           
-          # Skip build if not scheduled and image exists
-          if [ "$BUILD_NEEDED" = false ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "Skipping build - image already exists and this is a scheduled run"
+          # Skip build if image exists (regardless of trigger type)
+          if [ "$BUILD_NEEDED" = false ]; then
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "Skipping build - image already exists and this is a scheduled run"
+            else
+              echo "Skipping build - image already exists (manual/PR trigger)"
+            fi
             BUILD_NEEDED=false
-          elif [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "Manual/PR trigger - building regardless of existing images"
+          else
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "Building - new version available (scheduled run)"
+            else
+              echo "Building - image doesn't exist or new version available (manual/PR trigger)"
+            fi
             BUILD_NEEDED=true
           fi
           
