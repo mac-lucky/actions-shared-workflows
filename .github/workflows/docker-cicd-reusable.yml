@@ -113,6 +113,22 @@ jobs:
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "🔨 Manual workflow dispatch - building"
             BUILD_NEEDED="true"
+            
+            # Check if version already exists (for informational purposes only)
+            if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
+              UPSTREAM_VERSION=$(curl -s "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
+              if [ -n "${{ inputs.version_strip_prefix }}" ]; then
+                UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
+              fi
+              
+              EXISTING_VERSION=$(curl -s "https://registry.hub.docker.com/v2/repositories/${{ inputs.dockerhub_image }}/tags" | jq -r '.results[].name' | grep "^${UPSTREAM_VERSION}$" || echo "")
+              
+              if [ -n "$EXISTING_VERSION" ]; then
+                echo "ℹ️ Note: Version $UPSTREAM_VERSION already exists in Docker Hub, but building anyway due to manual trigger"
+              else
+                echo "ℹ️ Version $UPSTREAM_VERSION not found in Docker Hub - new build"
+              fi
+            fi
           # For push events (not on workflow changes), build
           elif [ "${{ github.event_name }}" = "push" ]; then
             echo "🔨 Push event - building"
