@@ -1,0 +1,253 @@
+---
+name: Reusable Docker CI/CD Workflow
+
+on:
+  workflow_call:
+    secrets:
+      DOCKER_HUB_USERNAME:
+        description: 'Docker Hub username'
+        required: true
+      DOCKER_HUB_PASSWORD:
+        description: 'Docker Hub password/token'
+        required: true
+    inputs:
+      # Application configuration
+      app_name:
+        description: 'Application name'
+        required: true
+        type: string
+      dockerhub_image:
+        description: 'Docker Hub image name (e.g., maclucky/app-name)'
+        required: true
+        type: string
+      ghcr_image:
+        description: 'GHCR image name (e.g., ghcr.io/mac-lucky/app-name)'
+        required: true
+        type: string
+      
+      # Version checking configuration
+      upstream_repo:
+        description: 'Upstream GitHub repository for version checking (e.g., caddyserver/caddy, tailscale/tailscale)'
+        required: false
+        type: string
+        default: ''
+      version_strip_prefix:
+        description: 'Prefix to strip from version tags (e.g., "v" for v2.8.4 -> 2.8.4)'
+        required: false
+        type: string
+        default: 'v'
+      build_arg_name:
+        description: 'Build argument name for version (e.g., CADDY_VERSION, DERP_VERSION)'
+        required: false
+        type: string
+        default: ''
+      
+      # Build configuration
+      dockerfile_path:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      build_context:
+        description: 'Build context path'
+        required: false
+        type: string
+        default: '.'
+      platforms:
+        description: 'Target platforms for multi-arch build'
+        required: false
+        type: string
+        default: 'linux/amd64,linux/arm64'
+      
+      # Trigger configuration
+      enable_version_check:
+        description: 'Enable upstream version checking and BUILD_NEEDED logic'
+        required: false
+        type: boolean
+        default: false
+      enable_schedule_build:
+        description: 'Enable builds on schedule triggers'
+        required: false
+        type: boolean
+        default: true
+      force_build:
+        description: 'Force build regardless of version check'
+        required: false
+        type: boolean
+        default: false
+      
+      # Security and quality
+      enable_security_scan:
+        description: 'Enable security scanning with Trivy'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
+  REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
+
+jobs:
+  # Job 1: Version Check and Build Decision
+  version-check:
+    name: Version Check and Build Decision
+    runs-on: ubuntu-latest
+    outputs:
+      build-needed: ${{ steps.check.outputs.build-needed }}
+      upstream-version: ${{ steps.check.outputs.upstream-version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Check if build is needed
+        id: check
+        run: |
+          BUILD_NEEDED="false"
+          UPSTREAM_VERSION=""
+          
+          # Force build for manual triggers or when version check is disabled
+          if [ "${{ inputs.force_build }}" = "true" ] || [ "${{ inputs.enable_version_check }}" = "false" ]; then
+            echo "🔨 Force build enabled or version check disabled"
+            BUILD_NEEDED="true"
+          # For workflow_dispatch, always build unless version check explicitly prevents it
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "🔨 Manual workflow dispatch - building"
+            BUILD_NEEDED="true"
+          # For push events (not on workflow changes), build
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "🔨 Push event - building"
+            BUILD_NEEDED="true"
+          # For schedule events, check if we should build
+          elif [ "${{ github.event_name }}" = "schedule" ] && [ "${{ inputs.enable_schedule_build }}" = "true" ]; then
+            if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
+              echo "📅 Schedule event with version check enabled"
+              
+              # Get latest version from upstream
+              UPSTREAM_VERSION=$(curl -s "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
+              if [ -n "${{ inputs.version_strip_prefix }}" ]; then
+                UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
+              fi
+              echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
+              
+              # Check if this version already exists in Docker Hub
+              EXISTING_VERSION=$(curl -s "https://registry.hub.docker.com/v2/repositories/${{ inputs.dockerhub_image }}/tags" | jq -r '.results[].name' | grep "^${UPSTREAM_VERSION}$" || echo "")
+              
+              if [ -z "$EXISTING_VERSION" ]; then
+                echo "✅ Version $UPSTREAM_VERSION not found in Docker Hub - build needed"
+                BUILD_NEEDED="true"
+              else
+                echo "⏭️ Version $UPSTREAM_VERSION already exists in Docker Hub - skipping build"
+                BUILD_NEEDED="false"
+              fi
+            else
+              echo "🔨 Schedule event without version check - building"
+              BUILD_NEEDED="true"
+            fi
+          else
+            echo "⏭️ No build trigger conditions met"
+            BUILD_NEEDED="false"
+          fi
+          
+          echo "build-needed=${BUILD_NEEDED}" >> $GITHUB_OUTPUT
+          echo "upstream-version=${UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
+          echo "BUILD_NEEDED=${BUILD_NEEDED}" >> $GITHUB_ENV
+          echo "UPSTREAM_VERSION=${UPSTREAM_VERSION}" >> $GITHUB_ENV
+
+  # Job 2: Build and Push Multi-arch Container Images
+  build-and-push:
+    name: Build & Push Container Images
+    runs-on: ubuntu-latest
+    needs: version-check
+    if: ${{ needs.version-check.outputs.build-needed == 'true' }}
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: --debug
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Prepare build variables
+        id: vars
+        run: |
+          # Determine version to use
+          if [ -n "${{ needs.version-check.outputs.upstream-version }}" ]; then
+            VERSION="${{ needs.version-check.outputs.upstream-version }}"
+            echo "🏷️ Using upstream version: $VERSION"
+          else
+            # Fallback to latest or git tag
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
+            echo "🏷️ Using fallback version: $VERSION"
+          fi
+          
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          
+          # Prepare build args
+          BUILD_ARGS=""
+          if [ -n "${{ inputs.build_arg_name }}" ] && [ -n "$VERSION" ]; then
+            BUILD_ARGS="${{ inputs.build_arg_name }}=${VERSION}"
+            echo "🔧 Build arg: $BUILD_ARGS"
+          fi
+          echo "BUILD_ARGS=${BUILD_ARGS}" >> $GITHUB_ENV
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.VERSION }}
+            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
+            ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}
+            ${{ env.REGISTRY_IMAGE_GHCR }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: ${{ env.BUILD_ARGS }}
+
+      - name: Container security scan
+        if: ${{ inputs.enable_security_scan }}
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}'
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+
+  # Job 3: Post-deployment verification
+  post-deploy-verify:
+    name: Post-deployment Verification
+    runs-on: ubuntu-latest
+    needs: [version-check, build-and-push]
+    if: ${{ needs.version-check.outputs.build-needed == 'true' }}
+    steps:
+      - name: Verify image pull and functionality
+        run: |
+          echo "Verifying images can be pulled..."
+          docker pull ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
+          docker pull ${{ env.REGISTRY_IMAGE_GHCR }}:latest
+          
+          echo "✅ Image verification successful"
