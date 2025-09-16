@@ -1,0 +1,268 @@
+---
+name: Reusable Weekly Docker Builder
+
+on:
+  workflow_call:
+    secrets:
+      DOCKER_HUB_USERNAME:
+        description: 'Docker Hub username'
+        required: true
+      DOCKER_HUB_PASSWORD:
+        description: 'Docker Hub password/token'
+        required: true
+    inputs:
+      # Application configuration
+      app_name:
+        description: 'Application name (e.g., derper, caddy-cloudflare)'
+        required: true
+        type: string
+      dockerhub_image:
+        description: 'Docker Hub image name (e.g., maclucky/derper)'
+        required: true
+        type: string
+      ghcr_image:
+        description: 'GHCR image name (e.g., ghcr.io/mac-lucky/derper)'
+        required: true
+        type: string
+      
+      # Version checking configuration
+      version_api_url:
+        description: 'API URL for version checking (e.g., https://api.github.com/repos/tailscale/tailscale/releases/latest)'
+        required: true
+        type: string
+      version_json_path:
+        description: 'JSON path to extract version (e.g., .tag_name)'
+        required: true
+        type: string
+      version_prefix:
+        description: 'Prefix to remove from version (e.g., "v" to remove v from v1.2.3)'
+        required: false
+        type: string
+        default: ''
+      
+      # Build configuration
+      dockerfile_path:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      build_context:
+        description: 'Build context path'
+        required: false
+        type: string
+        default: '.'
+      build_args:
+        description: 'Additional build arguments (JSON format)'
+        required: false
+        type: string
+        default: '{}'
+      
+      # Scheduling configuration
+      schedule_cron:
+        description: 'Cron expression for scheduling'
+        required: false
+        type: string
+        default: '0 0 * * MON'
+      enable_schedule:
+        description: 'Enable weekly scheduling'
+        required: false
+        type: boolean
+        default: true
+      
+      
+      # Build optimization
+      enable_cache:
+        description: 'Enable Docker layer caching'
+        required: false
+        type: boolean
+        default: true
+      platforms:
+        description: 'Target platforms (comma-separated)'
+        required: false
+        type: string
+        default: 'linux/amd64,linux/arm64'
+      
+      # Conditional building
+      check_existing_image:
+        description: 'Check if image already exists before building'
+        required: false
+        type: boolean
+        default: true
+      registry_to_check:
+        description: 'Registry to check for existing image (dockerhub, ghcr, both)'
+        required: false
+        type: string
+        default: 'ghcr'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  check-version:
+    name: Check Latest Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build-needed: ${{ steps.build-needed.outputs.build-needed }}
+    steps:
+      - name: Get latest version
+        id: version
+        run: |
+          echo "Fetching version from: ${{ inputs.version_api_url }}"
+          VERSION_RESPONSE=$(curl -s "${{ inputs.version_api_url }}")
+          VERSION=$(echo "$VERSION_RESPONSE" | jq -r "${{ inputs.version_json_path }}")
+          
+          # Remove prefix if specified
+          if [ -n "${{ inputs.version_prefix }}" ]; then
+            VERSION=$(echo "$VERSION" | sed "s/^${{ inputs.version_prefix }}//")
+          fi
+          
+          echo "Latest version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Check if build is needed
+        id: build-needed
+        if: ${{ inputs.check_existing_image }}
+        run: |
+          BUILD_NEEDED=true
+          
+          # Check Docker Hub
+          if [[ "${{ inputs.registry_to_check }}" == "dockerhub" || "${{ inputs.registry_to_check }}" == "both" ]]; then
+            echo "Checking Docker Hub for existing image..."
+            DOCKERHUB_TAG=$(curl -s "https://registry.hub.docker.com/v2/repositories/${{ inputs.dockerhub_image }}/tags" | \
+              jq -r '.results[].name' | grep "^$VERSION$" || echo "")
+            if [ -n "$DOCKERHUB_TAG" ]; then
+              echo "Image exists on Docker Hub: ${{ inputs.dockerhub_image }}:$VERSION"
+              BUILD_NEEDED=false
+            fi
+          fi
+          
+          # Check GHCR
+          if [[ "${{ inputs.registry_to_check }}" == "ghcr" || "${{ inputs.registry_to_check }}" == "both" ]]; then
+            echo "Checking GHCR for existing image..."
+            GHCR_TOKEN=$(echo ${{ secrets.GITHUB_TOKEN }} | base64)
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $GHCR_TOKEN" \
+              "https://ghcr.io/v2/${{ inputs.ghcr_image }}/manifests/$VERSION")
+            
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "Image exists on GHCR: ${{ inputs.ghcr_image }}:$VERSION"
+              BUILD_NEEDED=false
+            fi
+          fi
+          
+          # Skip build if not scheduled and image exists
+          if [ "$BUILD_NEEDED" = false ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "Skipping build - image already exists and this is a scheduled run"
+            BUILD_NEEDED=false
+          elif [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual/PR trigger - building regardless of existing images"
+            BUILD_NEEDED=true
+          fi
+          
+          echo "build-needed=$BUILD_NEEDED" >> $GITHUB_OUTPUT
+          echo "Build needed: $BUILD_NEEDED"
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: check-version
+    if: needs.check-version.outputs.build-needed == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: --debug
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse build args
+        id: build-args
+        run: |
+          BUILD_ARGS_JSON='${{ inputs.build_args }}'
+          BUILD_ARGS_STRING=""
+          
+          if [ "$BUILD_ARGS_JSON" != "{}" ] && [ -n "$BUILD_ARGS_JSON" ]; then
+            echo "Parsing build args: $BUILD_ARGS_JSON"
+            # Replace VERSION_PLACEHOLDER with actual version
+            BUILD_ARGS_JSON=$(echo "$BUILD_ARGS_JSON" | sed "s/VERSION_PLACEHOLDER/${{ needs.check-version.outputs.version }}/g")
+            # Convert JSON to build args format
+            BUILD_ARGS_STRING=$(echo "$BUILD_ARGS_JSON" | jq -r 'to_entries[] | "--build-arg \(.key)=\(.value)"' | tr '\n' ' ')
+            echo "Build args string: $BUILD_ARGS_STRING"
+          fi
+          
+          # Add version as build arg
+          BUILD_ARGS_STRING="$BUILD_ARGS_STRING --build-arg VERSION=${{ needs.check-version.outputs.version }}"
+          
+          echo "build-args=$BUILD_ARGS_STRING" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: |
+            ${{ inputs.dockerhub_image }}:${{ needs.check-version.outputs.version }}
+            ${{ inputs.dockerhub_image }}:latest
+            ${{ inputs.ghcr_image }}:${{ needs.check-version.outputs.version }}
+            ${{ inputs.ghcr_image }}:latest
+          cache-from: ${{ inputs.enable_cache && 'type=gha' || '' }}
+          cache-to: ${{ inputs.enable_cache && 'type=gha,mode=max' || '' }}
+          build-args: ${{ steps.build-args.outputs.build-args }}
+
+      - name: Build summary
+        run: |
+          echo "## 🐳 Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application:** ${{ inputs.app_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.check-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** ${{ inputs.platforms }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Images pushed:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ inputs.dockerhub_image }}:${{ needs.check-version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ inputs.dockerhub_image }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ inputs.ghcr_image }}:${{ needs.check-version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ inputs.ghcr_image }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify Build Result
+    runs-on: ubuntu-latest
+    needs: [check-version, build-and-push]
+    if: always()
+    steps:
+      - name: Notify result
+        run: |
+          if [ "${{ needs.check-version.outputs.build-needed }}" = "true" ]; then
+            if [ "${{ needs.build-and-push.result }}" = "success" ]; then
+              echo "✅ Successfully built and pushed ${{ inputs.app_name }}:${{ needs.check-version.outputs.version }}"
+            else
+              echo "❌ Failed to build ${{ inputs.app_name }}:${{ needs.check-version.outputs.version }}"
+              exit 1
+            fi
+          else
+            echo "ℹ️ No build needed for ${{ inputs.app_name }} - image ${{ needs.check-version.outputs.version }} already exists"
+          fi
