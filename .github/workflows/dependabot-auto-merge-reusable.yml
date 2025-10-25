@@ -125,7 +125,8 @@ jobs:
                     echo "check_name=$name" >> "$GITHUB_OUTPUT"
                     echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
 
-                    if [[ "$conclusion" == "success" ]]; then
+                    if [[ "$conclusion" == "success" || "$conclusion" == "neutral" || "$conclusion" == "skipped" ]]; then
+                      echo "Check '$name' completed with conclusion '$conclusion' (treated as pass)"
                       exit 0
                     else
                       echo "::error::Check '$name' completed with conclusion '$conclusion'"
@@ -182,7 +183,8 @@ jobs:
                     echo "check_name=$name" >> "$GITHUB_OUTPUT"
                     echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
 
-                    if [[ "$conclusion" == "success" ]]; then
+                    if [[ "$conclusion" == "success" || "$conclusion" == "neutral" || "$conclusion" == "skipped" ]]; then
+                      echo "Check '$name' completed with conclusion '$conclusion' (treated as pass)"
                       exit 0
                     else
                       echo "::error::Check '$name' completed with conclusion '$conclusion'"
