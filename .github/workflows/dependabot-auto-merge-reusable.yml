@@ -109,7 +109,7 @@ jobs:
 
           while [ $SECONDS -lt $deadline ]; do
             MATCHED=0
-            runs=$(gh api repos/$REPO/commits/$SHA/check-runs --paginate --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion // \"\")"' || true)
+            runs=$(gh api repos/$REPO/commits/$SHA/check-runs --paginate --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' || true)
 
             if [ -n "$runs" ]; then
               while IFS=$'\t' read -r name status conclusion; do
@@ -166,7 +166,7 @@ jobs:
 
           while [ $SECONDS -lt $deadline ]; do
             MATCHED=0
-            runs=$(gh api repos/$REPO/commits/$SHA/check-runs --paginate --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion // \"\")"' || true)
+            runs=$(gh api repos/$REPO/commits/$SHA/check-runs --paginate --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' || true)
 
             if [ -n "$runs" ]; then
               while IFS=$'\t' read -r name status conclusion; do
