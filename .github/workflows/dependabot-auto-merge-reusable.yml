@@ -74,7 +74,7 @@ jobs:
     name: Auto-merge Dependabot PRs
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: github.actor == 'dependabot[bot]' && github.event_name == 'pull_request'
+    if: github.actor == 'dependabot[bot]' && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
