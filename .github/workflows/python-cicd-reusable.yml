@@ -24,7 +24,7 @@ on:
         description: 'GHCR image name (e.g., ghcr.io/mac-lucky/app-name)'
         required: true
         type: string
-      
+
       # Build configuration
       dockerfile_path:
         description: 'Path to Dockerfile'
@@ -36,12 +36,19 @@ on:
         required: false
         type: string
         default: '.'
-      requirements_path:
-        description: 'Path to requirements.txt'
+
+      # Package manager configuration
+      use_uv:
+        description: 'Use uv package manager instead of pip'
+        required: false
+        type: boolean
+        default: true
+      python_version:
+        description: 'Python version to use (if not auto-detected from Dockerfile)'
         required: false
         type: string
-        default: './requirements.txt'
-      
+        default: '3.12'
+
       # Test configuration
       enable_container_tests:
         description: 'Enable container integration tests'
@@ -68,7 +75,7 @@ on:
         required: false
         type: string
         default: ''
-      
+
       # Security and quality
       enable_security_scan:
         description: 'Enable security scanning with Trivy'
@@ -80,7 +87,12 @@ on:
         required: false
         type: boolean
         default: true
-      
+      enable_code_analysis:
+        description: 'Enable code analysis (linting, formatting checks)'
+        required: false
+        type: boolean
+        default: true
+
       # Deployment
       enable_auto_version:
         description: 'Enable automatic version increment'
@@ -119,24 +131,24 @@ jobs:
             echo "code=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
           # For push events, check if there are changes to Python code
           if [ "${{ github.event_name }}" = "push" ]; then
             # Check if previous commit exists
             if git rev-parse HEAD~1 >/dev/null 2>&1; then
               # Check for changes in Python-related files
               CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
-              
+
               # Check for workflow changes
               if echo "$CHANGED_FILES" | grep -E '\.github/workflows/.*\.yml$' > /dev/null; then
                 echo "Workflow changes detected - running tests only:"
                 echo "$CHANGED_FILES" | grep -E '\.github/workflows/.*\.yml$'
                 echo "code=false" >> $GITHUB_OUTPUT
                 echo "workflow-changed=true" >> $GITHUB_OUTPUT
-              # Look for changes in Python files, requirements.txt, Dockerfile, or src directories
-              elif echo "$CHANGED_FILES" | grep -E '\.(py|txt)$|Dockerfile|^(src|app|python)/' > /dev/null; then
+              # Look for changes in Python files, pyproject.toml, uv.lock, Dockerfile, or src directories
+              elif echo "$CHANGED_FILES" | grep -E '\.(py|toml|lock)$|Dockerfile|^(src|app|python)/' > /dev/null; then
                 echo "Code changes detected:"
-                echo "$CHANGED_FILES" | grep -E '\.(py|txt)$|Dockerfile|^(src|app|python)/'
+                echo "$CHANGED_FILES" | grep -E '\.(py|toml|lock)$|Dockerfile|^(src|app|python)/'
                 echo "code=true" >> $GITHUB_OUTPUT
                 echo "workflow-changed=false" >> $GITHUB_OUTPUT
               else
@@ -167,17 +179,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Extract Python version from Dockerfile
+      - name: Extract Python version
         id: python-version
         run: |
-          # Extract Python version from Dockerfile
-          PYTHON_VERSION=$(grep -E '^FROM python:' ${{ inputs.dockerfile_path }} | head -1 | sed -E 's/.*python:([0-9]+)(\.[0-9]+)?(-.*)?.*/\1\2/')
-          if [ -z "$PYTHON_VERSION" ]; then
-            PYTHON_VERSION="3.12"
+          # Try to extract from Dockerfile first
+          if [ -f "${{ inputs.dockerfile_path }}" ]; then
+            PYTHON_VERSION=$(grep -E '^FROM.*python:' ${{ inputs.dockerfile_path }} | head -1 | sed -E 's/.*python:([0-9]+\.[0-9]+).*/\1/')
           fi
-          echo "Found Python version in Dockerfile: $PYTHON_VERSION"
 
-          # Set version for builds
+          # Try .python-version file
+          if [ -z "$PYTHON_VERSION" ] && [ -f "${{ inputs.build_context }}/.python-version" ]; then
+            PYTHON_VERSION=$(cat "${{ inputs.build_context }}/.python-version" | tr -d '[:space:]')
+          fi
+
+          # Try pyproject.toml
+          if [ -z "$PYTHON_VERSION" ] && [ -f "${{ inputs.build_context }}/pyproject.toml" ]; then
+            PYTHON_VERSION=$(grep -E 'requires-python' "${{ inputs.build_context }}/pyproject.toml" | sed -E 's/.*>=([0-9]+\.[0-9]+).*/\1/' | head -1)
+          fi
+
+          # Fallback to input or default
+          if [ -z "$PYTHON_VERSION" ]; then
+            PYTHON_VERSION="${{ inputs.python_version }}"
+          fi
+
+          echo "Found Python version: $PYTHON_VERSION"
           echo "version=$PYTHON_VERSION" >> $GITHUB_OUTPUT
 
   # Job 3: Code Quality & Security Analysis
@@ -185,63 +210,64 @@ jobs:
     name: Code Quality & Security Analysis
     runs-on: ubuntu-latest
     needs: [check-changes, setup]
+    if: ${{ inputs.enable_code_analysis }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
+      - name: Install uv
+        if: ${{ inputs.use_uv }}
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ needs.setup.outputs.python-version }}
-          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install dependencies with uv
+        if: ${{ inputs.use_uv }}
+        working-directory: ${{ inputs.build_context }}
         run: |
-          if [ -f "${{ inputs.requirements_path }}" ]; then
-            pip install -r ${{ inputs.requirements_path }}
+          if [ -f "pyproject.toml" ]; then
+            uv sync --frozen 2>/dev/null || uv sync
           else
-            echo "No requirements.txt found, skipping dependency installation"
+            echo "No pyproject.toml found, skipping dependency installation"
           fi
 
-      - name: Install development dependencies
+      - name: Install development tools
         run: |
-          pip install flake8 black isort bandit safety
+          if [ "${{ inputs.use_uv }}" = "true" ]; then
+            uv tool install ruff
+            uv tool install bandit
+          else
+            pip install ruff bandit
+          fi
 
-      - name: Run flake8
+      - name: Run ruff linter
+        working-directory: ${{ inputs.build_context }}
         run: |
-          # Find all Python files and run flake8
-          find . -name "*.py" -not -path "./.*" | head -20 | xargs flake8 --max-line-length=120 --ignore=E203,W503 || true
+          ruff check . --output-format=github || true
 
-      - name: Run black check
+      - name: Run ruff formatter check
+        working-directory: ${{ inputs.build_context }}
         run: |
-          # Check code formatting with black
-          find . -name "*.py" -not -path "./.*" | head -20 | xargs black --check --line-length=120 || true
-
-      - name: Run isort check
-        run: |
-          # Check import sorting with isort
-          find . -name "*.py" -not -path "./.*" | head -20 | xargs isort --check-only --profile black || true
+          ruff format --check . || true
 
       - name: Run bandit security scan
+        working-directory: ${{ inputs.build_context }}
         run: |
-          # Run bandit security linter
-          find . -name "*.py" -not -path "./.*" | head -20 | xargs bandit -r . -f json -o bandit-report.json || true
-
-      - name: Run safety check
-        run: |
-          # Check for known security vulnerabilities in dependencies
-          if [ -f "${{ inputs.requirements_path }}" ]; then
-            safety check -r ${{ inputs.requirements_path }} || true
-          fi
+          bandit -r . -f json -o bandit-report.json --exclude .venv,.git || true
 
       - name: Run Trivy vulnerability scanner
         if: ${{ inputs.enable_security_scan }}
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
-          scan-ref: "."
+          scan-ref: ${{ inputs.build_context }}
           format: "table"
 
   # Job 4: Build Container Image
@@ -249,6 +275,7 @@ jobs:
     name: Build Container Image
     runs-on: ubuntu-latest
     needs: [check-changes, setup, code-analysis]
+    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') }}
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -291,13 +318,13 @@ jobs:
     name: Container Integration Test
     runs-on: ubuntu-latest
     needs: [check-changes, setup, build-container]
-    if: ${{ inputs.enable_container_tests }}
+    if: ${{ inputs.enable_container_tests && needs.build-container.result == 'success' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Download container artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v4
         with:
           name: container-image
           path: /tmp
@@ -312,7 +339,7 @@ jobs:
           echo "Running basic container test for ${{ inputs.app_name }}"
           docker run -d --name test-container ${{ inputs.app_name }}:test
           sleep 10
-          
+
           # Basic health check - this should be customized per application
           if docker ps | grep -q test-container; then
             echo "✅ Container is running"
@@ -321,7 +348,7 @@ jobs:
             docker logs test-container
             exit 1
           fi
-          
+
           docker stop test-container
           docker rm test-container
 
@@ -339,13 +366,13 @@ jobs:
     name: Kubernetes Integration Test
     runs-on: ubuntu-latest
     needs: [check-changes, setup, build-container]
-    if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' }}
+    if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' && needs.build-container.result == 'success' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Download container artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v4
         with:
           name: container-image
           path: /tmp
@@ -386,7 +413,7 @@ jobs:
           if [ -z "$RELEASE_NAME" ]; then
             RELEASE_NAME="${{ inputs.app_name }}"
           fi
-          
+
           helm upgrade --install $RELEASE_NAME ${{ inputs.helm_chart_path }} \
             --namespace monitoring \
             --set image.tag=test \
@@ -401,7 +428,7 @@ jobs:
           if [ -z "$APP_LABEL" ]; then
             APP_LABEL="${{ inputs.app_name }}"
           fi
-          
+
           echo "=== Checking deployment status ==="
           kubectl get pods -n monitoring -l app=$APP_LABEL -o wide
           kubectl get services -n monitoring
@@ -413,7 +440,7 @@ jobs:
           if [ -z "$APP_LABEL" ]; then
             APP_LABEL="${{ inputs.app_name }}"
           fi
-          
+
           kubectl wait --for=condition=ready pod -l app=$APP_LABEL \
             -n monitoring --timeout=120s
 
@@ -423,7 +450,7 @@ jobs:
           if [ -z "$APP_LABEL" ]; then
             APP_LABEL="${{ inputs.app_name }}"
           fi
-          
+
           echo "=== Health check ==="
           # Check if all pods are running
           READY_PODS=$(kubectl get pods -n monitoring -l app=$APP_LABEL \
@@ -447,7 +474,7 @@ jobs:
           if [ -z "$RELEASE_NAME" ]; then
             RELEASE_NAME="${{ inputs.app_name }}"
           fi
-          
+
           helm uninstall $RELEASE_NAME -n monitoring || true
           kubectl delete namespace monitoring || true
 
@@ -456,7 +483,7 @@ jobs:
     name: Build & Push Container Images
     runs-on: ubuntu-latest
     needs: [check-changes, setup, build-container, container-test, kubernetes-test]
-    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release') && github.ref == 'refs/heads/master' && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped')) }}
+    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped')) }}
     permissions:
       contents: read
       packages: write
@@ -556,11 +583,11 @@ jobs:
     name: Post-deployment Verification
     runs-on: ubuntu-latest
     needs: [check-changes, build-and-push]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.check-changes.outputs.workflow-changed != 'true' }}
+    if: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && needs.check-changes.outputs.workflow-changed != 'true' }}
     steps:
       - name: Verify image pull and functionality
         run: |
           echo "Verifying images can be pulled..."
           docker pull ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
-          
+
           echo "✅ Image verification successful"
