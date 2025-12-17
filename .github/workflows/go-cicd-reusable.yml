@@ -6,10 +6,10 @@ on:
     secrets:
       DOCKER_HUB_USERNAME:
         description: 'Docker Hub username'
-        required: true
+        required: false
       DOCKER_HUB_PASSWORD:
         description: 'Docker Hub password/token'
-        required: true
+        required: false
     inputs:
       # Application configuration
       app_name:
@@ -87,6 +87,11 @@ on:
         required: false
         type: boolean
         default: true
+      push_to_dockerhub:
+        description: 'Push images to Docker Hub (in addition to GHCR)'
+        required: false
+        type: boolean
+        default: false
 
 env:
   REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
@@ -437,6 +442,7 @@ jobs:
           buildkitd-flags: --debug
 
       - name: Log in to Docker Hub
+        if: ${{ inputs.push_to_dockerhub }}
         uses: docker/login-action@v3
         with:
           registry: docker.io
@@ -456,9 +462,16 @@ jobs:
         if: ${{ inputs.enable_auto_version }}
         id: get_latest_version
         run: |
+          # Extract image name from GHCR URL (e.g., ghcr.io/mac-lucky/app-name -> app-name)
+          IMAGE_NAME=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|.*/||')
+          OWNER=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
+
+          # Get tags from GHCR using GitHub API
           LATEST_TAG=$(curl -s \
-            "https://registry.hub.docker.com/v2/repositories/${{ env.REGISTRY_IMAGE_DOCKERHUB }}/tags?page_size=100" | \
-            jq -r '.results[].name' | \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
+            jq -r '.[].metadata.container.tags[]' | \
             grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
             sort -V | tail -n 1 || echo "")
           echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
@@ -479,6 +492,15 @@ jobs:
           fi
           echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
 
+      - name: Generate tags
+        id: generate_tags
+        run: |
+          TAGS="${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }},${{ env.REGISTRY_IMAGE_GHCR }}:latest"
+          if [ "${{ inputs.push_to_dockerhub }}" = "true" ]; then
+            TAGS="${TAGS},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -486,11 +508,7 @@ jobs:
           file: ${{ inputs.dockerfile_path }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }}
-            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
-            ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
-            ${{ env.REGISTRY_IMAGE_GHCR }}:latest
+          tags: ${{ steps.generate_tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -521,9 +539,16 @@ jobs:
     needs: [check-changes, build-and-push]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
       - name: Verify image pull and functionality
         run: |
-          echo "Verifying images can be pulled..."
-          docker pull ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
-          
+          echo "Verifying images can be pulled from GHCR..."
+          docker pull ${{ env.REGISTRY_IMAGE_GHCR }}:latest
+
           echo "✅ Image verification successful"

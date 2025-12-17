@@ -6,10 +6,10 @@ on:
     secrets:
       DOCKER_HUB_USERNAME:
         description: 'Docker Hub username'
-        required: true
+        required: false
       DOCKER_HUB_PASSWORD:
         description: 'Docker Hub password/token'
-        required: true
+        required: false
     inputs:
       # Application configuration
       app_name:
@@ -83,6 +83,13 @@ on:
         type: boolean
         default: true
 
+      # Deployment
+      push_to_dockerhub:
+        description: 'Push images to Docker Hub (in addition to GHCR)'
+        required: false
+        type: boolean
+        default: false
+
 env:
   REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
   REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
@@ -121,12 +128,20 @@ jobs:
                 UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
               fi
               
-              EXISTING_VERSION=$(curl -s "https://registry.hub.docker.com/v2/repositories/${{ inputs.dockerhub_image }}/tags" | jq -r '.results[].name' | grep "^${UPSTREAM_VERSION}$" || echo "")
-              
+              # Check if this version already exists in GHCR
+              IMAGE_NAME=$(echo "${{ inputs.ghcr_image }}" | sed 's|.*/||')
+              OWNER=$(echo "${{ inputs.ghcr_image }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
+
+              EXISTING_VERSION=$(curl -s \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
+                jq -r '.[].metadata.container.tags[]' | grep "^${UPSTREAM_VERSION}$" || echo "")
+
               if [ -n "$EXISTING_VERSION" ]; then
-                echo "ℹ️ Note: Version $UPSTREAM_VERSION already exists in Docker Hub, but building anyway due to manual trigger"
+                echo "ℹ️ Note: Version $UPSTREAM_VERSION already exists in GHCR, but building anyway due to manual trigger"
               else
-                echo "ℹ️ Version $UPSTREAM_VERSION not found in Docker Hub - new build"
+                echo "ℹ️ Version $UPSTREAM_VERSION not found in GHCR - new build"
               fi
             fi
           # For push events (not on workflow changes), build
@@ -145,14 +160,21 @@ jobs:
               fi
               echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
               
-              # Check if this version already exists in Docker Hub
-              EXISTING_VERSION=$(curl -s "https://registry.hub.docker.com/v2/repositories/${{ inputs.dockerhub_image }}/tags" | jq -r '.results[].name' | grep "^${UPSTREAM_VERSION}$" || echo "")
-              
+              # Check if this version already exists in GHCR
+              IMAGE_NAME=$(echo "${{ inputs.ghcr_image }}" | sed 's|.*/||')
+              OWNER=$(echo "${{ inputs.ghcr_image }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
+
+              EXISTING_VERSION=$(curl -s \
+                -H "Authorization: Bearer ${{ github.token }}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
+                jq -r '.[].metadata.container.tags[]' | grep "^${UPSTREAM_VERSION}$" || echo "")
+
               if [ -z "$EXISTING_VERSION" ]; then
-                echo "✅ Version $UPSTREAM_VERSION not found in Docker Hub - build needed"
+                echo "✅ Version $UPSTREAM_VERSION not found in GHCR - build needed"
                 BUILD_NEEDED="true"
               else
-                echo "⏭️ Version $UPSTREAM_VERSION already exists in Docker Hub - skipping build"
+                echo "⏭️ Version $UPSTREAM_VERSION already exists in GHCR - skipping build"
                 BUILD_NEEDED="false"
               fi
             else
@@ -192,6 +214,7 @@ jobs:
           buildkitd-flags: --debug
 
       - name: Log in to Docker Hub
+        if: ${{ inputs.push_to_dockerhub }}
         uses: docker/login-action@v3
         with:
           registry: docker.io
@@ -228,6 +251,15 @@ jobs:
           fi
           echo "BUILD_ARGS=${BUILD_ARGS}" >> $GITHUB_ENV
 
+      - name: Generate tags
+        id: generate_tags
+        run: |
+          TAGS="${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }},${{ env.REGISTRY_IMAGE_GHCR }}:latest"
+          if [ "${{ inputs.push_to_dockerhub }}" = "true" ]; then
+            TAGS="${TAGS},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.VERSION }},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -235,11 +267,7 @@ jobs:
           file: ${{ inputs.dockerfile_path }}
           platforms: ${{ inputs.platforms }}
           push: true
-          tags: |
-            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.VERSION }}
-            ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
-            ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}
-            ${{ env.REGISTRY_IMAGE_GHCR }}:latest
+          tags: ${{ steps.generate_tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: ${{ env.BUILD_ARGS }}
@@ -260,10 +288,16 @@ jobs:
     needs: [version-check, build-and-push]
     if: ${{ needs.version-check.outputs.build-needed == 'true' }}
     steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
       - name: Verify image pull and functionality
         run: |
-          echo "Verifying images can be pulled..."
-          docker pull ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest
+          echo "Verifying images can be pulled from GHCR..."
           docker pull ${{ env.REGISTRY_IMAGE_GHCR }}:latest
-          
+
           echo "✅ Image verification successful"
