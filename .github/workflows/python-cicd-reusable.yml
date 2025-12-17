@@ -137,6 +137,14 @@ jobs:
             exit 0
           fi
 
+          # For workflow_dispatch, always build
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual workflow dispatch - forcing build"
+            echo "code=true" >> $GITHUB_OUTPUT
+            echo "workflow-changed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           # For push events, check if there are changes to Python code
           if [ "${{ github.event_name }}" = "push" ]; then
             # Check if previous commit exists
