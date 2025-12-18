@@ -342,12 +342,37 @@ jobs:
           name: container-image
           path: /tmp
 
-      - name: Container health check
-        uses: ./.github/actions/container-healthcheck
+      - name: Load container image
+        run: |
+          gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
+          docker image ls -a
+
+      - name: Basic container functionality test
+        run: |
+          echo "Running basic container test for ${{ inputs.app_name }}"
+          docker run -d --name test-container ${{ inputs.app_name }}:test
+          sleep 10
+
+          # Basic health check - this should be customized per application
+          if docker ps | grep -q test-container; then
+            echo "✅ Container is running"
+          else
+            echo "❌ Container failed to start"
+            docker logs test-container
+            exit 1
+          fi
+
+          docker stop test-container
+          docker rm test-container
+
+      - name: Container security scan
+        if: ${{ inputs.enable_security_scan }}
+        uses: aquasecurity/trivy-action@master
         with:
-          image_tar: /tmp/${{ inputs.app_name }}.tar.gz
-          container_name: ${{ inputs.app_name }}
-          enable_security_scan: ${{ inputs.enable_security_scan }}
+          image-ref: "${{ inputs.app_name }}:test"
+          format: "table"
+          exit-code: "0"
+          ignore-unfixed: true
 
   # Job 6: Kubernetes Integration Tests (Optional)
   kubernetes-test:
@@ -370,24 +395,90 @@ jobs:
           gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
           docker image ls -a
 
-      - name: Setup Minikube
-        uses: ./.github/actions/setup-minikube
+      - name: Setup Minikube with 2 nodes
+        uses: medyagh/setup-minikube@latest
+        with:
+          minikube-version: 'latest'
+          driver: docker
+          container-runtime: docker
+          kubernetes-version: v1.32.0
+          cpus: 2
+          memory: 2048m
+          addons: metrics-server
+          start-args: '--nodes=2'
 
       - name: Load Docker image into Minikube
         run: |
           minikube image load ${{ inputs.app_name }}:test
 
-      - name: Deploy with Helm
-        uses: ./.github/actions/helm-deploy
-        with:
-          chart_path: ${{ inputs.helm_chart_path }}
-          release_name: ${{ inputs.helm_release_name != '' && inputs.helm_release_name || inputs.app_name }}
-          app_name: ${{ inputs.app_name }}
+      - name: Create monitoring namespace
+        run: |
+          kubectl create namespace monitoring || true
 
-      - name: Kubernetes health check
-        uses: ./.github/actions/kubernetes-healthcheck
+      - name: Install Helm
+        uses: azure/setup-helm@v4
         with:
-          app_label_selector: ${{ inputs.app_label_selector != '' && inputs.app_label_selector || inputs.app_name }}
+          version: 'latest'
+
+      - name: Deploy application with Helm
+        run: |
+          RELEASE_NAME="${{ inputs.helm_release_name }}"
+          if [ -z "$RELEASE_NAME" ]; then
+            RELEASE_NAME="${{ inputs.app_name }}"
+          fi
+
+          helm upgrade --install $RELEASE_NAME ${{ inputs.helm_chart_path }} \
+            --namespace monitoring \
+            --set image.tag=test \
+            --set image.repository=${{ inputs.app_name }} \
+            --set image.pullPolicy=Never \
+            --set serviceMonitor.enabled=false \
+            --wait --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          APP_LABEL="${{ inputs.app_label_selector }}"
+          if [ -z "$APP_LABEL" ]; then
+            APP_LABEL="${{ inputs.app_name }}"
+          fi
+
+          echo "=== Checking deployment status ==="
+          kubectl get pods -n monitoring -l app=$APP_LABEL -o wide
+          kubectl get services -n monitoring
+          kubectl get configmap -n monitoring
+
+      - name: Wait for pods to be ready
+        run: |
+          APP_LABEL="${{ inputs.app_label_selector }}"
+          if [ -z "$APP_LABEL" ]; then
+            APP_LABEL="${{ inputs.app_name }}"
+          fi
+
+          kubectl wait --for=condition=ready pod -l app=$APP_LABEL \
+            -n monitoring --timeout=120s
+
+      - name: Health check
+        run: |
+          APP_LABEL="${{ inputs.app_label_selector }}"
+          if [ -z "$APP_LABEL" ]; then
+            APP_LABEL="${{ inputs.app_name }}"
+          fi
+
+          echo "=== Health check ==="
+          # Check if all pods are running
+          READY_PODS=$(kubectl get pods -n monitoring -l app=$APP_LABEL \
+            -o jsonpath='{.items[*].status.phase}' | grep -o Running | wc -l)
+          TOTAL_PODS=$(kubectl get pods -n monitoring \
+            -l app=$APP_LABEL --no-headers | wc -l)
+          echo "Ready pods: $READY_PODS / $TOTAL_PODS"
+          if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && \
+             [ "$TOTAL_PODS" -gt 0 ]; then
+            echo "✅ All pods are running successfully"
+          else
+            echo "❌ Not all pods are running"
+            kubectl describe pods -n monitoring -l app=$APP_LABEL
+            exit 1
+          fi
 
       - name: Cleanup
         if: always()
