@@ -24,5 +24,4 @@ runs:
       run: |
         echo "Verifying images can be pulled from GHCR..."
         docker pull ${{ inputs.registry_image }}:latest
-
         echo "✅ Image verification successful"
