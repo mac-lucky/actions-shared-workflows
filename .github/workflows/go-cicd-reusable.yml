@@ -112,7 +112,7 @@ jobs:
 
       - name: Check for code changes
         id: changes
-        uses: mac-lucky/actions-shared-workflows/.github/actions/check-code-changes@feat/simplify-actions
+        uses: mac-lucky/actions-shared-workflows/.github/actions/check-code-changes@master
         with:
           file_patterns: '\.(go|mod|sum)$|Dockerfile|^(src|cmd|internal|pkg)/'
           event_name: ${{ github.event_name }}
@@ -246,7 +246,7 @@ jobs:
           path: /tmp
 
       - name: Container health check
-        uses: mac-lucky/actions-shared-workflows/.github/actions/container-healthcheck@feat/simplify-actions
+        uses: mac-lucky/actions-shared-workflows/.github/actions/container-healthcheck@master
         with:
           image_tar: /tmp/${{ inputs.app_name }}.tar.gz
           container_name: ${{ inputs.app_name }}
@@ -274,21 +274,21 @@ jobs:
           docker image ls -a
 
       - name: Setup Minikube
-        uses: mac-lucky/actions-shared-workflows/.github/actions/setup-minikube@feat/simplify-actions
+        uses: mac-lucky/actions-shared-workflows/.github/actions/setup-minikube@master
 
       - name: Load Docker image into Minikube
         run: |
           minikube image load ${{ inputs.app_name }}:test
 
       - name: Deploy with Helm
-        uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@feat/simplify-actions
+        uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@master
         with:
           chart_path: ${{ inputs.helm_chart_path }}
           release_name: ${{ inputs.helm_release_name != '' && inputs.helm_release_name || inputs.app_name }}
           app_name: ${{ inputs.app_name }}
 
       - name: Kubernetes health check
-        uses: mac-lucky/actions-shared-workflows/.github/actions/kubernetes-healthcheck@feat/simplify-actions
+        uses: mac-lucky/actions-shared-workflows/.github/actions/kubernetes-healthcheck@master
         with:
           app_label_selector: ${{ inputs.app_label_selector != '' && inputs.app_label_selector || inputs.app_name }}
 
@@ -420,7 +420,7 @@ jobs:
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master' }}
     steps:
       - name: Verify deployed image
-        uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@feat/simplify-actions
+        uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@master
         with:
           registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
           github_token: ${{ github.token }}
