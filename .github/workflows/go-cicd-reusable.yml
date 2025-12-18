@@ -103,7 +103,7 @@ jobs:
     name: Check for Code Changes
     runs-on: ubuntu-latest
     outputs:
-      code-changed: ${{ steps.changes.outputs.code }}
+      code-changed: ${{ steps.changes.outputs.code-changed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -112,46 +112,10 @@ jobs:
 
       - name: Check for code changes
         id: changes
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "Release event - forcing build"
-            echo "code=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # For workflow_dispatch, always build
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual workflow dispatch - forcing build"
-            echo "code=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # For push events, check if there are changes to Go code
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # Check if previous commit exists
-            if git rev-parse HEAD~1 >/dev/null 2>&1; then
-              # Check for changes in Go-related files
-              CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
-              
-              # Look for changes in Go files, go.mod, go.sum, Dockerfile, or src directories
-              if echo "$CHANGED_FILES" | grep -E '\.(go|mod|sum)$|Dockerfile|^(src|cmd|internal|pkg)/' > /dev/null; then
-                echo "Code changes detected:"
-                echo "$CHANGED_FILES" | grep -E '\.(go|mod|sum)$|Dockerfile|^(src|cmd|internal|pkg)/'
-                echo "code=true" >> $GITHUB_OUTPUT
-              else
-                echo "No code changes detected. Only documentation/config changes:"
-                echo "$CHANGED_FILES"
-                echo "code=false" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "First commit - forcing build"
-              echo "code=true" >> $GITHUB_OUTPUT
-            fi
-          else
-            # For PR events, always run tests but don't push
-            echo "Pull request - running tests only"
-            echo "code=false" >> $GITHUB_OUTPUT
-          fi
+        uses: mac-lucky/actions-shared-workflows/.github/actions/check-code-changes@master
+        with:
+          file_patterns: '\.(go|mod|sum)$|Dockerfile|^(src|cmd|internal|pkg)/'
+          event_name: ${{ github.event_name }}
 
   setup:
     name: Setup Build Environment
@@ -281,32 +245,8 @@ jobs:
           name: container-image
           path: /tmp
 
-      - name: Load container image
-        run: |
-          gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
-          docker image ls -a
-
-      - name: Basic container functionality test
-        run: |
-          echo "Running basic container test for ${{ inputs.app_name }}"
-          docker run -d --name test-container ${{ inputs.app_name }}:test
-          sleep 10
-          
-          # Basic health check - this should be customized per application
-          if docker ps | grep -q test-container; then
-            echo "✅ Container is running"
-          else
-            echo "❌ Container failed to start"
-            docker logs test-container
-            exit 1
-          fi
-          
-          docker stop test-container
-          docker rm test-container
-
-      - name: Container security scan
-        if: ${{ inputs.enable_security_scan }}
-        uses: aquasecurity/trivy-action@master
+      - name: Container health check
+        uses: mac-lucky/actions-shared-workflows/.github/actions/container-healthcheck@master
         with:
           image-ref: "${{ inputs.app_name }}:test"
           format: "table"
@@ -334,28 +274,22 @@ jobs:
           gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
           docker image ls -a
 
-      - name: Setup Minikube with 2 nodes
-        uses: medyagh/setup-minikube@latest
-        with:
-          minikube-version: 'latest'
-          driver: docker
-          container-runtime: docker
-          kubernetes-version: v1.32.0
-          cpus: 2
-          memory: 2048m
-          addons: metrics-server
-          start-args: '--nodes=2'
+      - name: Setup Minikube
+        uses: mac-lucky/actions-shared-workflows/.github/actions/setup-minikube@master
 
       - name: Load Docker image into Minikube
         run: |
           minikube image load ${{ inputs.app_name }}:test
 
-      - name: Create monitoring namespace
-        run: |
-          kubectl create namespace monitoring || true
+      - name: Deploy with Helm
+        uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@master
+        with:
+          chart_path: ${{ inputs.helm_chart_path }}
+          release_name: ${{ inputs.helm_release_name != '' && inputs.helm_release_name || inputs.app_name }}
+          app_name: ${{ inputs.app_name }}
 
-      - name: Install Helm
-        uses: azure/setup-helm@v4
+      - name: Kubernetes health check
+        uses: mac-lucky/actions-shared-workflows/.github/actions/kubernetes-healthcheck@master
         with:
           version: 'latest'
 
@@ -546,16 +480,8 @@ jobs:
     needs: [check-changes, build-and-push]
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master' }}
     steps:
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Verify deployed image
+        uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@master
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ github.token }}
-
-      - name: Verify image pull and functionality
-        run: |
-          echo "Verifying images can be pulled from GHCR..."
-          docker pull ${{ env.REGISTRY_IMAGE_GHCR }}:latest
-
-          echo "✅ Image verification successful"
+          registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
+          github_token: ${{ github.token }}
