@@ -75,6 +75,21 @@ on:
         required: false
         type: string
         default: ''
+      enable_custom_metrics_test:
+        description: 'Enable custom metrics endpoint test with port-forward'
+        required: false
+        type: boolean
+        default: false
+      metrics_port:
+        description: 'Port for metrics endpoint (e.g., 9107)'
+        required: false
+        type: string
+        default: ''
+      metrics_test_pattern:
+        description: 'Pattern to search for in metrics output (e.g., ping_loss_ratio)'
+        required: false
+        type: string
+        default: ''
 
       # Security and quality
       enable_security_scan:
@@ -341,67 +356,48 @@ jobs:
       - name: Kubernetes health check
         uses: mac-lucky/actions-shared-workflows/.github/actions/kubernetes-healthcheck@master
         with:
-          version: 'latest'
+          app_label_selector: ${{ inputs.app_label_selector != '' && inputs.app_label_selector || inputs.app_name }}
 
-      - name: Deploy application with Helm
+      - name: Check logs
+        run: |
+          APP_LABEL="${{ inputs.app_label_selector }}"
+          if [ -z "$APP_LABEL" ]; then
+            APP_LABEL="${{ inputs.app_name }}"
+          fi
+
+          sleep 30
+          echo "=== Application logs ==="
+          kubectl logs -l app=$APP_LABEL -n monitoring --tail=50
+
+      - name: Test metrics endpoint
+        if: ${{ inputs.enable_custom_metrics_test }}
         run: |
           RELEASE_NAME="${{ inputs.helm_release_name }}"
           if [ -z "$RELEASE_NAME" ]; then
             RELEASE_NAME="${{ inputs.app_name }}"
           fi
 
-          helm upgrade --install $RELEASE_NAME ${{ inputs.helm_chart_path }} \
-            --namespace monitoring \
-            --set image.tag=test \
-            --set image.repository=${{ inputs.app_name }} \
-            --set image.pullPolicy=Never \
-            --set serviceMonitor.enabled=false \
-            --wait --timeout=300s
+          echo "=== Testing metrics endpoint ==="
+          kubectl port-forward -n monitoring svc/$RELEASE_NAME ${{ inputs.metrics_port }}:${{ inputs.metrics_port }} &
+          PF_PID=$!
+          sleep 10
 
-      - name: Verify deployment
-        run: |
-          APP_LABEL="${{ inputs.app_label_selector }}"
-          if [ -z "$APP_LABEL" ]; then
-            APP_LABEL="${{ inputs.app_name }}"
-          fi
-
-          echo "=== Checking deployment status ==="
-          kubectl get pods -n monitoring -l app=$APP_LABEL -o wide
-          kubectl get services -n monitoring
-          kubectl get configmap -n monitoring
-
-      - name: Wait for pods to be ready
-        run: |
-          APP_LABEL="${{ inputs.app_label_selector }}"
-          if [ -z "$APP_LABEL" ]; then
-            APP_LABEL="${{ inputs.app_name }}"
-          fi
-
-          kubectl wait --for=condition=ready pod -l app=$APP_LABEL \
-            -n monitoring --timeout=120s
-
-      - name: Health check
-        run: |
-          APP_LABEL="${{ inputs.app_label_selector }}"
-          if [ -z "$APP_LABEL" ]; then
-            APP_LABEL="${{ inputs.app_name }}"
-          fi
-
-          echo "=== Health check ==="
-          # Check if all pods are running
-          READY_PODS=$(kubectl get pods -n monitoring -l app=$APP_LABEL \
-            -o jsonpath='{.items[*].status.phase}' | grep -o Running | wc -l)
-          TOTAL_PODS=$(kubectl get pods -n monitoring \
-            -l app=$APP_LABEL --no-headers | wc -l)
-          echo "Ready pods: $READY_PODS / $TOTAL_PODS"
-          if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && \
-             [ "$TOTAL_PODS" -gt 0 ]; then
-            echo "✅ All pods are running successfully"
+          # Test metrics endpoint
+          response=$(curl -s http://localhost:${{ inputs.metrics_port }}/metrics)
+          if echo "$response" | grep -q "${{ inputs.metrics_test_pattern }}"; then
+            echo "✅ Metrics endpoint working - ${{ inputs.metrics_test_pattern }} found"
+            echo "Sample metrics:"
+            echo "$response" | head -20
           else
-            echo "❌ Not all pods are running"
-            kubectl describe pods -n monitoring -l app=$APP_LABEL
+            echo "❌ Metrics endpoint not working - ${{ inputs.metrics_test_pattern }} not found"
+            echo "Response received:"
+            echo "$response"
+            kill $PF_PID || true
             exit 1
           fi
+
+          # Cleanup
+          kill $PF_PID || true
 
       - name: Cleanup
         if: always()
