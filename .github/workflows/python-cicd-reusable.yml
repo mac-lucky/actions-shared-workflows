@@ -299,10 +299,9 @@ jobs:
       - name: Container health check
         uses: mac-lucky/actions-shared-workflows/.github/actions/container-healthcheck@master
         with:
-          image-ref: "${{ inputs.app_name }}:test"
-          format: "table"
-          exit-code: "0"
-          ignore-unfixed: true
+          image_tar: /tmp/${{ inputs.app_name }}.tar.gz
+          container_name: ${{ inputs.app_name }}
+          enable_security_scan: ${{ inputs.enable_security_scan }}
 
   # Job 6: Kubernetes Integration Tests (Optional)
   kubernetes-test:
