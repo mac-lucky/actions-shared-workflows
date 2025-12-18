@@ -120,7 +120,7 @@ jobs:
     name: Check for Code Changes
     runs-on: ubuntu-latest
     outputs:
-      code-changed: ${{ steps.changes.outputs.code }}
+      code-changed: ${{ steps.changes.outputs.code-changed }}
       workflow-changed: ${{ steps.changes.outputs.workflow-changed }}
     steps:
       - name: Checkout code
@@ -130,57 +130,11 @@ jobs:
 
       - name: Check for code changes
         id: changes
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "Release event - forcing build"
-            echo "code=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # For workflow_dispatch, always build
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual workflow dispatch - forcing build"
-            echo "code=true" >> $GITHUB_OUTPUT
-            echo "workflow-changed=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # For push events, check if there are changes to Python code
-          if [ "${{ github.event_name }}" = "push" ]; then
-            # Check if previous commit exists
-            if git rev-parse HEAD~1 >/dev/null 2>&1; then
-              # Check for changes in Python-related files
-              CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
-
-              # Check for workflow changes
-              if echo "$CHANGED_FILES" | grep -E '\.github/workflows/.*\.yml$' > /dev/null; then
-                echo "Workflow changes detected - running tests only:"
-                echo "$CHANGED_FILES" | grep -E '\.github/workflows/.*\.yml$'
-                echo "code=false" >> $GITHUB_OUTPUT
-                echo "workflow-changed=true" >> $GITHUB_OUTPUT
-              # Look for changes in Python files, pyproject.toml, uv.lock, Dockerfile, or src directories
-              elif echo "$CHANGED_FILES" | grep -E '\.(py|toml|lock)$|Dockerfile|^(src|app|python)/' > /dev/null; then
-                echo "Code changes detected:"
-                echo "$CHANGED_FILES" | grep -E '\.(py|toml|lock)$|Dockerfile|^(src|app|python)/'
-                echo "code=true" >> $GITHUB_OUTPUT
-                echo "workflow-changed=false" >> $GITHUB_OUTPUT
-              else
-                echo "No code changes detected. Only documentation/config changes:"
-                echo "$CHANGED_FILES"
-                echo "code=false" >> $GITHUB_OUTPUT
-                echo "workflow-changed=false" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "First commit - forcing build"
-              echo "code=true" >> $GITHUB_OUTPUT
-              echo "workflow-changed=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            # For PR events, always run tests but don't push
-            echo "Pull request - running tests only"
-            echo "code=false" >> $GITHUB_OUTPUT
-            echo "workflow-changed=false" >> $GITHUB_OUTPUT
-          fi
+        uses: mac-lucky/actions-shared-workflows/.github/actions/check-code-changes@feat/simplify-actions
+        with:
+          file_patterns: '\.(py|toml|lock)$|Dockerfile|^(src|app|python)/'
+          event_name: ${{ github.event_name }}
+          detect_workflow_changes: 'true'
 
   setup:
     name: Setup Build Environment
@@ -520,16 +474,8 @@ jobs:
     needs: [check-changes, build-and-push]
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && needs.check-changes.outputs.workflow-changed != 'true' }}
     steps:
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Verify deployed image
+        uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@feat/simplify-actions
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ github.token }}
-
-      - name: Verify image pull and functionality
-        run: |
-          echo "Verifying images can be pulled from GHCR..."
-          docker pull ${{ env.REGISTRY_IMAGE_GHCR }}:latest
-
-          echo "✅ Image verification successful"
+          registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
+          github_token: ${{ github.token }}
