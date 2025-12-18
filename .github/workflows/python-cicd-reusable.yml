@@ -343,7 +343,7 @@ jobs:
           path: /tmp
 
       - name: Container health check
-        uses: ./.github/actions/container-healthcheck
+        uses: mac-lucky/actions-shared-workflows/.github/actions/container-healthcheck@feat/simplify-actions
         with:
           image_tar: /tmp/${{ inputs.app_name }}.tar.gz
           container_name: ${{ inputs.app_name }}
@@ -371,21 +371,21 @@ jobs:
           docker image ls -a
 
       - name: Setup Minikube
-        uses: ./.github/actions/setup-minikube
+        uses: mac-lucky/actions-shared-workflows/.github/actions/setup-minikube@feat/simplify-actions
 
       - name: Load Docker image into Minikube
         run: |
           minikube image load ${{ inputs.app_name }}:test
 
       - name: Deploy with Helm
-        uses: ./.github/actions/helm-deploy
+        uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@feat/simplify-actions
         with:
           chart_path: ${{ inputs.helm_chart_path }}
           release_name: ${{ inputs.helm_release_name != '' && inputs.helm_release_name || inputs.app_name }}
           app_name: ${{ inputs.app_name }}
 
       - name: Kubernetes health check
-        uses: ./.github/actions/kubernetes-healthcheck
+        uses: mac-lucky/actions-shared-workflows/.github/actions/kubernetes-healthcheck@feat/simplify-actions
         with:
           app_label_selector: ${{ inputs.app_label_selector != '' && inputs.app_label_selector || inputs.app_name }}
 
