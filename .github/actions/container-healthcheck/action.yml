@@ -1,0 +1,51 @@
+name: Container Health Check
+description: Run container with health verification and optional security scan
+
+inputs:
+  image_tar:
+    description: Path to container image tar file
+    required: true
+  container_name:
+    description: Name for running container
+    required: true
+  enable_security_scan:
+    description: Run Trivy security scan
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Load container image
+      shell: bash
+      run: |
+        gunzip -c ${{ inputs.image_tar }} | docker load
+        docker image ls -a
+
+    - name: Basic container functionality test
+      shell: bash
+      run: |
+        echo "Running basic container test for ${{ inputs.container_name }}"
+        docker run -d --name test-container ${{ inputs.container_name }}:test
+        sleep 10
+
+        # Basic health check - this should be customized per application
+        if docker ps | grep -q test-container; then
+          echo "✅ Container is running"
+        else
+          echo "❌ Container failed to start"
+          docker logs test-container
+          exit 1
+        fi
+
+        docker stop test-container
+        docker rm test-container
+
+    - name: Container security scan
+      if: ${{ inputs.enable_security_scan == 'true' }}
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: "${{ inputs.container_name }}:test"
+        format: "table"
+        exit-code: "0"
+        ignore-unfixed: true
