@@ -148,6 +148,15 @@ jobs:
           elif [ "${{ github.event_name }}" = "push" ]; then
             echo "🔨 Push event - building"
             BUILD_NEEDED="true"
+
+            # Get upstream version if configured
+            if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
+              UPSTREAM_VERSION=$(curl -s "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
+              if [ -n "${{ inputs.version_strip_prefix }}" ]; then
+                UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
+              fi
+              echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
+            fi
           # For schedule events, check if we should build
           elif [ "${{ github.event_name }}" = "schedule" ] && [ "${{ inputs.enable_schedule_build }}" = "true" ]; then
             if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
