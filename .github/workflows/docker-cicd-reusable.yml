@@ -200,27 +200,34 @@ jobs:
           echo "BUILD_NEEDED=${BUILD_NEEDED}" >> $GITHUB_ENV
           echo "UPSTREAM_VERSION=${UPSTREAM_VERSION}" >> $GITHUB_ENV
 
-  # Job 2: Build and Push Multi-arch Container Images
-  build-and-push:
-    name: Build & Push Container Images
-    runs-on: ubuntu-latest
+  # Job 2: Build platform-specific images in parallel (native runners)
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
     needs: version-check
     if: ${{ needs.version-check.outputs.build-needed == 'true' }}
     permissions:
       contents: write
       packages: write
-      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
+      - name: Prepare platform pair
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-flags: --debug
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
@@ -249,9 +256,9 @@ jobs:
             VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
             echo "🏷️ Using fallback version: $VERSION"
           fi
-          
+
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
-          
+
           # Prepare build args
           BUILD_ARGS=""
           if [ -n "${{ inputs.build_arg_name }}" ] && [ -n "$VERSION" ]; then
@@ -260,26 +267,115 @@ jobs:
           fi
           echo "BUILD_ARGS=${BUILD_ARGS}" >> $GITHUB_ENV
 
-      - name: Generate tags
-        id: generate_tags
-        run: |
-          TAGS="${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }},${{ env.REGISTRY_IMAGE_GHCR }}:latest"
-          if [ "${{ inputs.push_to_dockerhub }}" = "true" ]; then
-            TAGS="${TAGS},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.VERSION }},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest"
-          fi
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          tags: |
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=latest
 
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
-          platforms: ${{ inputs.platforms }}
-          push: true
-          tags: ${{ steps.generate_tags.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ env.BUILD_ARGS }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE_GHCR }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Job 3: Merge platform-specific images into multi-arch manifest
+  merge:
+    name: Create Multi-arch Manifest
+    runs-on: ubuntu-latest
+    needs: [version-check, build]
+    if: ${{ needs.version-check.outputs.build-needed == 'true' }}
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare version
+        id: vars
+        run: |
+          if [ -n "${{ needs.version-check.outputs.upstream-version }}" ]; then
+            VERSION="${{ needs.version-check.outputs.upstream-version }}"
+          else
+            VERSION="latest"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          tags: |
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=latest
+
+      - name: Log in to Docker Hub
+        if: ${{ inputs.push_to_dockerhub }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Create manifest list and push (GHCR)
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+
+      - name: Create manifest list and push (Docker Hub)
+        if: ${{ inputs.push_to_dockerhub }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.VERSION }} \
+            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest \
+            $(printf '${{ env.REGISTRY_IMAGE_DOCKERHUB }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}
 
       - name: Container security scan
         if: ${{ inputs.enable_security_scan }}
@@ -290,11 +386,11 @@ jobs:
           exit-code: '0'
           ignore-unfixed: true
 
-  # Job 3: Post-deployment verification
+  # Job 4: Post-deployment verification
   post-deploy-verify:
     name: Post-deployment Verification
     runs-on: ubuntu-latest
-    needs: [version-check, build-and-push]
+    needs: [version-check, merge]
     if: ${{ needs.version-check.outputs.build-needed == 'true' }}
     steps:
       - name: Login to GitHub Container Registry
