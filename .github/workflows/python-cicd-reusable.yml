@@ -431,10 +431,11 @@ jobs:
           helm uninstall $RELEASE_NAME -n monitoring || true
           kubectl delete namespace monitoring || true
 
-  # Job 7: Build platform-specific images in parallel (native runners)
+  # Job 7: Build platform-specific images in parallel (native runners with QEMU fallback for private repos)
   build:
     name: Build (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
+    # Use native ARM runner for public repos, fallback to QEMU on ubuntu-latest for private repos
+    runs-on: ${{ (matrix.platform == 'linux/arm64' && github.event.repository.private) && 'ubuntu-latest' || matrix.runner }}
     needs: [check-changes, setup, build-container, container-test, kubernetes-test]
     if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/test/')) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped')) }}
     permissions:
@@ -458,6 +459,10 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - name: Set up QEMU (fallback for private repos)
+        if: ${{ matrix.platform == 'linux/arm64' && github.event.repository.private }}
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
