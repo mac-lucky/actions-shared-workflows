@@ -187,12 +187,24 @@ jobs:
           echo "Found Python version: $PYTHON_VERSION"
           echo "version=$PYTHON_VERSION" >> $GITHUB_OUTPUT
 
-  # Job 3: Code Quality & Security Analysis
+  # Job 3: Code Quality & Security Analysis (parallel matrix)
   code-analysis:
-    name: Code Quality & Security Analysis
+    name: Code Analysis (${{ matrix.tool }})
     runs-on: ubuntu-latest
     needs: [check-changes, setup]
     if: ${{ inputs.enable_code_analysis }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: ruff-lint
+            name: Ruff Linter
+          - tool: ruff-format
+            name: Ruff Formatter
+          - tool: bandit
+            name: Bandit Security
+          - tool: trivy
+            name: Trivy Security Scan
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -200,18 +212,19 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv
-        if: ${{ inputs.use_uv }}
+        if: ${{ inputs.use_uv && (matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format' || matrix.tool == 'bandit') }}
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
 
       - name: Set up Python
+        if: matrix.tool != 'trivy'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ needs.setup.outputs.python-version }}
 
       - name: Install dependencies with uv
-        if: ${{ inputs.use_uv }}
+        if: ${{ inputs.use_uv && (matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format') }}
         working-directory: ${{ inputs.build_context }}
         run: |
           if [ -f "pyproject.toml" ]; then
@@ -220,32 +233,40 @@ jobs:
             echo "No pyproject.toml found, skipping dependency installation"
           fi
 
-      - name: Install development tools
+      - name: Install ruff
+        if: matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format'
         run: |
           if [ "${{ inputs.use_uv }}" = "true" ]; then
             uv tool install ruff
-            uv tool install bandit
           else
-            pip install ruff bandit
+            pip install ruff
           fi
 
       - name: Run ruff linter
+        if: matrix.tool == 'ruff-lint'
         working-directory: ${{ inputs.build_context }}
         run: |
           ruff check . --output-format=github || true
 
       - name: Run ruff formatter check
+        if: matrix.tool == 'ruff-format'
         working-directory: ${{ inputs.build_context }}
         run: |
           ruff format --check . || true
 
-      - name: Run bandit security scan
+      - name: Install and run bandit
+        if: matrix.tool == 'bandit'
         working-directory: ${{ inputs.build_context }}
         run: |
+          if [ "${{ inputs.use_uv }}" = "true" ]; then
+            uv tool install bandit
+          else
+            pip install bandit
+          fi
           bandit -r . -f json -o bandit-report.json --exclude .venv,.git || true
 
       - name: Run Trivy vulnerability scanner
-        if: ${{ inputs.enable_security_scan }}
+        if: matrix.tool == 'trivy' && inputs.enable_security_scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
@@ -410,27 +431,41 @@ jobs:
           helm uninstall $RELEASE_NAME -n monitoring || true
           kubectl delete namespace monitoring || true
 
-  # Job 7: Build and Push Multi-arch Container Images
-  build-and-push:
-    name: Build & Push Container Images
-    runs-on: ubuntu-latest
+  # Job 7: Build platform-specific images in parallel (native runners with QEMU fallback for private repos)
+  build:
+    name: Build (${{ matrix.platform }})
+    # Use native ARM runner for public repos, fallback to QEMU on ubuntu-latest for private repos
+    runs-on: ${{ (matrix.platform == 'linux/arm64' && github.event.repository.private) && 'ubuntu-latest' || matrix.runner }}
     needs: [check-changes, setup, build-container, container-test, kubernetes-test]
     if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped')) }}
     permissions:
       contents: read
       packages: write
-      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    outputs:
+      new-version: ${{ steps.set_version.outputs.new_version }}
     steps:
+      - name: Prepare platform pair
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up QEMU
+      - name: Set up QEMU (fallback for private repos)
+        if: ${{ matrix.platform == 'linux/arm64' && github.event.repository.private }}
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-flags: --debug
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
@@ -439,7 +474,6 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_PASSWORD }}
-          logout: false
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -447,7 +481,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
-          logout: false
 
       - name: Get latest version tag
         if: ${{ inputs.enable_auto_version }}
@@ -482,31 +515,115 @@ jobs:
             NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.1.0")
           fi
           echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
+          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Generate tags
-        id: generate_tags
-        run: |
-          TAGS="${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }},${{ env.REGISTRY_IMAGE_GHCR }}:latest"
-          if [ "${{ inputs.push_to_dockerhub }}" = "true" ]; then
-            TAGS="${TAGS},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }},${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest"
-          fi
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          tags: |
+            type=raw,value=${{ env.NEW_VERSION }}
+            type=raw,value=latest
 
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.generate_tags.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             PYTHON_VERSION=${{ needs.setup.outputs.python-version }}
             VERSION=${{ env.NEW_VERSION }}
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE_GHCR }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Job 8: Merge platform-specific images into multi-arch manifest
+  merge:
+    name: Create Multi-arch Manifest
+    runs-on: ubuntu-latest
+    needs: [check-changes, setup, build]
+    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare version
+        run: |
+          echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> $GITHUB_ENV
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          tags: |
+            type=raw,value=${{ env.NEW_VERSION }}
+            type=raw,value=latest
+
+      - name: Log in to Docker Hub
+        if: ${{ inputs.push_to_dockerhub }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Create manifest list and push (GHCR)
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+
+      - name: Create manifest list and push (Docker Hub)
+        if: ${{ inputs.push_to_dockerhub }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }} \
+            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest \
+            $(printf '${{ env.REGISTRY_IMAGE_DOCKERHUB }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
 
       - name: Generate SBOM
         if: ${{ inputs.enable_sbom }}
@@ -523,11 +640,11 @@ jobs:
           name: sbom
           path: sbom.spdx.json
 
-  # Job 8: Post-deployment verification
+  # Job 9: Post-deployment verification
   post-deploy-verify:
     name: Post-deployment Verification
     runs-on: ubuntu-latest
-    needs: [check-changes, build-and-push]
+    needs: [check-changes, merge]
     if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && needs.check-changes.outputs.workflow-changed != 'true' }}
     steps:
       - name: Verify deployed image
