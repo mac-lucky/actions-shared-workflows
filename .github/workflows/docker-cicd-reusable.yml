@@ -123,8 +123,11 @@ jobs:
             
             # Check if version already exists (for informational purposes only)
             if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
-              UPSTREAM_VERSION=$(curl -s "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
-              if [ -n "${{ inputs.version_strip_prefix }}" ]; then
+              UPSTREAM_VERSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
+              if [ "$UPSTREAM_VERSION" = "null" ] || [ -z "$UPSTREAM_VERSION" ]; then
+                echo "⚠️ Failed to get upstream version - API may be rate limited"
+                UPSTREAM_VERSION=""
+              elif [ -n "${{ inputs.version_strip_prefix }}" ]; then
                 UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
               fi
               
@@ -151,40 +154,52 @@ jobs:
 
             # Get upstream version if configured
             if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
-              UPSTREAM_VERSION=$(curl -s "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
-              if [ -n "${{ inputs.version_strip_prefix }}" ]; then
+              UPSTREAM_VERSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
+              if [ "$UPSTREAM_VERSION" = "null" ] || [ -z "$UPSTREAM_VERSION" ]; then
+                echo "⚠️ Failed to get upstream version - API may be rate limited"
+                UPSTREAM_VERSION=""
+              elif [ -n "${{ inputs.version_strip_prefix }}" ]; then
                 UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
               fi
-              echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
+              if [ -n "$UPSTREAM_VERSION" ]; then
+                echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
+              fi
             fi
           # For schedule events, check if we should build
           elif [ "${{ github.event_name }}" = "schedule" ] && [ "${{ inputs.enable_schedule_build }}" = "true" ]; then
             if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
               echo "📅 Schedule event with version check enabled"
-              
+
               # Get latest version from upstream
-              UPSTREAM_VERSION=$(curl -s "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
-              if [ -n "${{ inputs.version_strip_prefix }}" ]; then
+              UPSTREAM_VERSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
+              if [ "$UPSTREAM_VERSION" = "null" ] || [ -z "$UPSTREAM_VERSION" ]; then
+                echo "⚠️ Failed to get upstream version - API may be rate limited"
+                echo "⏭️ Skipping build due to version fetch failure"
+                BUILD_NEEDED="false"
+              elif [ -n "${{ inputs.version_strip_prefix }}" ]; then
                 UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
               fi
-              echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
-              
-              # Check if this version already exists in GHCR
-              IMAGE_NAME=$(echo "${{ inputs.ghcr_image }}" | sed 's|.*/||')
-              OWNER=$(echo "${{ inputs.ghcr_image }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
 
-              EXISTING_VERSION=$(curl -s \
-                -H "Authorization: Bearer ${{ github.token }}" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
-                jq -r '.[].metadata.container.tags[]' | grep "^${UPSTREAM_VERSION}$" || echo "")
+              if [ -n "$UPSTREAM_VERSION" ]; then
+                echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
 
-              if [ -z "$EXISTING_VERSION" ]; then
-                echo "✅ Version $UPSTREAM_VERSION not found in GHCR - build needed"
-                BUILD_NEEDED="true"
-              else
-                echo "⏭️ Version $UPSTREAM_VERSION already exists in GHCR - skipping build"
-                BUILD_NEEDED="false"
+                # Check if this version already exists in GHCR
+                IMAGE_NAME=$(echo "${{ inputs.ghcr_image }}" | sed 's|.*/||')
+                OWNER=$(echo "${{ inputs.ghcr_image }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
+
+                EXISTING_VERSION=$(curl -s \
+                  -H "Authorization: Bearer ${{ github.token }}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
+                  jq -r '.[].metadata.container.tags[]' | grep "^${UPSTREAM_VERSION}$" || echo "")
+
+                if [ -z "$EXISTING_VERSION" ]; then
+                  echo "✅ Version $UPSTREAM_VERSION not found in GHCR - build needed"
+                  BUILD_NEEDED="true"
+                else
+                  echo "⏭️ Version $UPSTREAM_VERSION already exists in GHCR - skipping build"
+                  BUILD_NEEDED="false"
+                fi
               fi
             else
               echo "🔨 Schedule event without version check - building"
