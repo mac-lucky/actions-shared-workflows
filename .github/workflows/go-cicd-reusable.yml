@@ -10,6 +10,9 @@ on:
       DOCKER_HUB_PASSWORD:
         description: 'Docker Hub password/token'
         required: false
+      HELM_CHART_REPO_TOKEN:
+        description: 'PAT for checking out a private Helm chart repository'
+        required: false
     inputs:
       # Application configuration
       app_name:
@@ -325,6 +328,7 @@ jobs:
           repository: ${{ inputs.helm_chart_repo }}
           ref: ${{ inputs.helm_chart_repo_ref }}
           path: helm-chart-repo
+          token: ${{ secrets.HELM_CHART_REPO_TOKEN || github.token }}
 
       - name: Download container artifact
         uses: actions/download-artifact@v5
