@@ -207,17 +207,6 @@ jobs:
           go-version: ${{ needs.setup.outputs.go-version }}
           cache: true
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ needs.setup.outputs.go-version }}-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-${{ needs.setup.outputs.go-version }}-
-            ${{ runner.os }}-go-
-
       - name: Download dependencies
         run: go mod download
 
