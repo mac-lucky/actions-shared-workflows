@@ -53,6 +53,16 @@ on:
         required: false
         type: string
         default: ''
+      helm_chart_repo:
+        description: 'External repository containing the Helm chart (e.g., owner/repo). If set, the repo is checked out alongside the main code.'
+        required: false
+        type: string
+        default: ''
+      helm_chart_repo_ref:
+        description: 'Branch or ref for the external Helm chart repository'
+        required: false
+        type: string
+        default: 'master'
       helm_release_name:
         description: 'Helm release name for deployment'
         required: false
@@ -308,6 +318,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Checkout Helm chart repository
+        if: ${{ inputs.helm_chart_repo != '' }}
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.helm_chart_repo }}
+          ref: ${{ inputs.helm_chart_repo_ref }}
+          path: helm-chart-repo
+
       - name: Download container artifact
         uses: actions/download-artifact@v5
         with:
@@ -329,7 +347,7 @@ jobs:
       - name: Deploy with Helm
         uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@master
         with:
-          chart_path: ${{ inputs.helm_chart_path }}
+          chart_path: ${{ inputs.helm_chart_repo != '' && format('helm-chart-repo/{0}', inputs.helm_chart_path) || inputs.helm_chart_path }}
           release_name: ${{ inputs.helm_release_name != '' && inputs.helm_release_name || inputs.app_name }}
           app_name: ${{ inputs.app_name }}
 
