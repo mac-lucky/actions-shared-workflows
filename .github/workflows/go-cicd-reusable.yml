@@ -63,6 +63,21 @@ on:
         required: false
         type: string
         default: ''
+      container_test_pre_script:
+        description: 'Shell script to run before the container test (e.g., start dependencies)'
+        required: false
+        type: string
+        default: ''
+      container_test_run_args:
+        description: 'Extra flags for docker run in container test (e.g., env vars, volumes, networks)'
+        required: false
+        type: string
+        default: ''
+      container_test_health_url:
+        description: 'HTTP URL to curl for container health verification'
+        required: false
+        type: string
+        default: ''
       enable_custom_metrics_test:
         description: 'Enable custom metrics endpoint test with port-forward'
         required: false
@@ -279,6 +294,9 @@ jobs:
           image_tar: /tmp/${{ inputs.app_name }}.tar.gz
           container_name: ${{ inputs.app_name }}
           enable_security_scan: ${{ inputs.enable_security_scan }}
+          pre_test_script: ${{ inputs.container_test_pre_script }}
+          docker_run_args: ${{ inputs.container_test_run_args }}
+          health_check_url: ${{ inputs.container_test_health_url }}
 
   # Job 6: Kubernetes Integration Tests (Optional)
   kubernetes-test:

@@ -12,6 +12,18 @@ inputs:
     description: Run Trivy security scan
     required: false
     default: 'true'
+  pre_test_script:
+    description: Shell script to run before starting the container (e.g., start dependencies, create config files)
+    required: false
+    default: ''
+  docker_run_args:
+    description: Extra flags for docker run (e.g., env vars, volumes, networks)
+    required: false
+    default: ''
+  health_check_url:
+    description: HTTP URL to curl for health verification (if empty, falls back to docker ps check)
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -22,24 +34,61 @@ runs:
         gunzip -c ${{ inputs.image_tar }} | docker load
         docker image ls -a
 
+    - name: Run pre-test setup
+      if: ${{ inputs.pre_test_script != '' }}
+      shell: bash
+      run: |
+        echo "Running pre-test setup script..."
+        ${{ inputs.pre_test_script }}
+
     - name: Basic container functionality test
       shell: bash
       run: |
         echo "Running basic container test for ${{ inputs.container_name }}"
-        docker run -d --name test-container ${{ inputs.container_name }}:test
+        docker run -d --name test-container ${{ inputs.docker_run_args }} ${{ inputs.container_name }}:test
         sleep 10
 
-        # Basic health check - this should be customized per application
-        if docker ps | grep -q test-container; then
-          echo "✅ Container is running"
+        if [ -n "${{ inputs.health_check_url }}" ]; then
+          # HTTP health check
+          echo "Checking health endpoint: ${{ inputs.health_check_url }}"
+          for i in $(seq 1 30); do
+            if curl -sf "${{ inputs.health_check_url }}" > /dev/null 2>&1; then
+              echo "✅ Health check passed"
+              curl -s "${{ inputs.health_check_url }}"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "❌ Health check failed after 30 attempts"
+              docker logs test-container
+              docker stop test-container || true
+              docker rm test-container || true
+              exit 1
+            fi
+            echo "Waiting for health endpoint... (attempt $i/30)"
+            sleep 2
+          done
         else
-          echo "❌ Container failed to start"
-          docker logs test-container
-          exit 1
+          # Basic health check - verify container is still running
+          if docker ps | grep -q test-container; then
+            echo "✅ Container is running"
+          else
+            echo "❌ Container failed to start"
+            docker logs test-container
+            exit 1
+          fi
         fi
 
         docker stop test-container
         docker rm test-container
+
+    - name: Cleanup pre-test resources
+      if: ${{ always() && inputs.pre_test_script != '' }}
+      shell: bash
+      run: |
+        echo "Cleaning up pre-test resources..."
+        docker stop test-postgres 2>/dev/null || true
+        docker rm test-postgres 2>/dev/null || true
+        docker network rm test-net 2>/dev/null || true
 
     - name: Container security scan
       if: ${{ inputs.enable_security_scan == 'true' }}
