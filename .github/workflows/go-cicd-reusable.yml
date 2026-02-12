@@ -221,13 +221,33 @@ jobs:
 
       - name: Run go vet
         if: matrix.tool == 'go-vet'
-        run: go vet ./...
+        run: |
+          if OUTPUT=$(go vet ./... 2>&1); then
+            echo "## :white_check_mark: Go Vet" >> $GITHUB_STEP_SUMMARY
+            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :x: Go Vet" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
 
       - name: Run staticcheck
         if: matrix.tool == 'staticcheck'
-        uses: dominikh/staticcheck-action@v1.4.0
-        with:
-          version: "latest"
+        id: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          if OUTPUT=$(staticcheck ./... 2>&1); then
+            echo "## :white_check_mark: Staticcheck" >> $GITHUB_STEP_SUMMARY
+            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :x: Staticcheck" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
 
       - name: Run Trivy vulnerability scanner
         if: matrix.tool == 'trivy' && inputs.enable_security_scan
@@ -236,6 +256,20 @@ jobs:
           scan-type: "fs"
           scan-ref: "."
           format: "table"
+          output: "trivy-results.txt"
+
+      - name: Trivy job summary
+        if: matrix.tool == 'trivy' && inputs.enable_security_scan && always()
+        run: |
+          if [ ! -s trivy-results.txt ]; then
+            echo "## :white_check_mark: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :shield: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
   # Job 4: Build Container Image
   build-container:
