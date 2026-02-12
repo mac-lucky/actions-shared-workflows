@@ -405,6 +405,20 @@ jobs:
           format: 'table'
           exit-code: '0'
           ignore-unfixed: true
+          output: 'trivy-results.txt'
+
+      - name: Trivy job summary
+        if: ${{ inputs.enable_security_scan && always() }}
+        run: |
+          if [ ! -s trivy-results.txt ]; then
+            echo "## :white_check_mark: Trivy Container Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :shield: Trivy Container Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
   # Job 4: Post-deployment verification
   post-deploy-verify:

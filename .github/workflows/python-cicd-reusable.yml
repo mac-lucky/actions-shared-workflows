@@ -246,13 +246,32 @@ jobs:
         if: matrix.tool == 'ruff-lint'
         working-directory: ${{ inputs.build_context }}
         run: |
+          if OUTPUT=$(ruff check . --output-format=text 2>&1); then
+            echo "## :white_check_mark: Ruff Linter" >> $GITHUB_STEP_SUMMARY
+            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :warning: Ruff Linter" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          # Also output in GitHub format for annotations
           ruff check . --output-format=github || true
 
       - name: Run ruff formatter check
         if: matrix.tool == 'ruff-format'
         working-directory: ${{ inputs.build_context }}
         run: |
-          ruff format --check . || true
+          if OUTPUT=$(ruff format --check . 2>&1); then
+            echo "## :white_check_mark: Ruff Formatter" >> $GITHUB_STEP_SUMMARY
+            echo "All files are properly formatted." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :warning: Ruff Formatter" >> $GITHUB_STEP_SUMMARY
+            echo "The following files need formatting:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Install and run bandit
         if: matrix.tool == 'bandit'
@@ -263,7 +282,15 @@ jobs:
           else
             pip install bandit
           fi
-          bandit -r . -f json -o bandit-report.json --exclude .venv,.git || true
+          if OUTPUT=$(bandit -r . -f txt --exclude .venv,.git 2>&1); then
+            echo "## :white_check_mark: Bandit Security" >> $GITHUB_STEP_SUMMARY
+            echo "No security issues found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :warning: Bandit Security" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Run Trivy vulnerability scanner
         if: matrix.tool == 'trivy' && inputs.enable_security_scan
@@ -272,6 +299,20 @@ jobs:
           scan-type: "fs"
           scan-ref: ${{ inputs.build_context }}
           format: "table"
+          output: "trivy-results.txt"
+
+      - name: Trivy job summary
+        if: matrix.tool == 'trivy' && inputs.enable_security_scan && always()
+        run: |
+          if [ ! -s trivy-results.txt ]; then
+            echo "## :white_check_mark: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :shield: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
   # Job 4: Build Container Image
   build-container:
