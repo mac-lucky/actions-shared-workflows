@@ -340,7 +340,7 @@ jobs:
       - name: Deploy with Helm
         uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@master
         with:
-          chart_path: ${{ inputs.helm_chart_repo != '' && format('helm-chart-repo/{0}', inputs.helm_chart_path) || inputs.helm_chart_path }}
+          chart_path: ${{ inputs.helm_chart_repo != '' && format('./helm-chart-repo/{0}', inputs.helm_chart_path) || inputs.helm_chart_path }}
           release_name: ${{ inputs.helm_release_name != '' && inputs.helm_release_name || inputs.app_name }}
           app_name: ${{ inputs.app_name }}
 
