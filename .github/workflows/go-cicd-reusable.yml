@@ -628,7 +628,7 @@ jobs:
           docker buildx imagetools create \
             -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }} \
             -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest \
-            $(printf '${{ env.REGISTRY_IMAGE_DOCKERHUB }}@sha256:%s ' *)
+            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
 
       - name: Inspect image
         run: |
