@@ -246,7 +246,7 @@ jobs:
         if: matrix.tool == 'ruff-lint'
         working-directory: ${{ inputs.build_context }}
         run: |
-          if OUTPUT=$(ruff check . --output-format=text 2>&1); then
+          if OUTPUT=$(ruff check . --output-format=concise 2>&1); then
             echo "## :white_check_mark: Ruff Linter" >> $GITHUB_STEP_SUMMARY
             echo "No issues found." >> $GITHUB_STEP_SUMMARY
           else
