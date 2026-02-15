@@ -39,7 +39,12 @@ on:
         required: false
         type: string
         default: '.'
-      
+      go_module_path:
+        description: 'Path to Go module directory relative to repo root (e.g., ./github)'
+        required: false
+        type: string
+        default: '.'
+
       # Test configuration
       enable_container_tests:
         description: 'Enable container integration tests'
@@ -179,7 +184,7 @@ jobs:
         id: go-version
         run: |
           # Extract Go version from go.mod
-          GO_VERSION=$(grep "^go " go.mod | cut -d' ' -f2)
+          GO_VERSION=$(grep "^go " ${{ inputs.go_module_path }}/go.mod | cut -d' ' -f2)
           echo "Found Go version in go.mod: $GO_VERSION"
 
           # Set version for builds
@@ -211,16 +216,20 @@ jobs:
         with:
           go-version: ${{ needs.setup.outputs.go-version }}
           cache: true
+          cache-dependency-path: ${{ inputs.go_module_path }}/go.sum
 
       - name: Download dependencies
+        working-directory: ${{ inputs.go_module_path }}
         run: go mod download
 
       - name: Verify dependencies
         if: matrix.tool == 'go-vet'
+        working-directory: ${{ inputs.go_module_path }}
         run: go mod verify
 
       - name: Run go vet
         if: matrix.tool == 'go-vet'
+        working-directory: ${{ inputs.go_module_path }}
         run: |
           if OUTPUT=$(go vet ./... 2>&1); then
             echo "## :white_check_mark: Go Vet" >> $GITHUB_STEP_SUMMARY
@@ -236,6 +245,7 @@ jobs:
       - name: Run staticcheck
         if: matrix.tool == 'staticcheck'
         id: staticcheck
+        working-directory: ${{ inputs.go_module_path }}
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@latest
           if OUTPUT=$(staticcheck ./... 2>&1); then
@@ -254,7 +264,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
-          scan-ref: "."
+          scan-ref: ${{ inputs.go_module_path }}
           format: "table"
           output: "trivy-results.txt"
 
