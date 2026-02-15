@@ -24,9 +24,11 @@ runs:
       run: |
         echo "Verifying images can be pulled from GHCR..."
         for i in $(seq 1 5); do
-          docker pull ${{ inputs.registry_image }}:latest && break
-          echo "Attempt $i failed, retrying in 10s..."
-          sleep 10
+          if docker pull ${{ inputs.registry_image }}:latest; then
+            break
+          fi
+          echo "Attempt $i/5 failed, retrying in 15s..."
+          sleep 15
         done
         docker inspect ${{ inputs.registry_image }}:latest > /dev/null
         echo "✅ Image verification successful"
