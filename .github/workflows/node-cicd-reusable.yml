@@ -1,0 +1,553 @@
+---
+name: Reusable Node.js CI/CD Workflow
+
+on:
+  workflow_call:
+    secrets:
+      DOCKER_HUB_USERNAME:
+        description: 'Docker Hub username'
+        required: false
+      DOCKER_HUB_PASSWORD:
+        description: 'Docker Hub password/token'
+        required: false
+    inputs:
+      # Application configuration
+      app_name:
+        description: 'Application name'
+        required: true
+        type: string
+      dockerhub_image:
+        description: 'Docker Hub image name (e.g., maclucky/app-name)'
+        required: true
+        type: string
+      ghcr_image:
+        description: 'GHCR image name (e.g., ghcr.io/mac-lucky/app-name)'
+        required: true
+        type: string
+
+      # Build configuration
+      dockerfile_path:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      build_context:
+        description: 'Build context path'
+        required: false
+        type: string
+        default: '.'
+      node_version:
+        description: 'Node.js version (fallback if not detected from Dockerfile)'
+        required: false
+        type: string
+        default: '22'
+      package_manager:
+        description: 'Package manager to use (bun or npm)'
+        required: false
+        type: string
+        default: 'bun'
+
+      # Test configuration
+      enable_container_tests:
+        description: 'Enable container integration tests'
+        required: false
+        type: boolean
+        default: true
+      container_test_pre_script:
+        description: 'Shell script to run before the container test (e.g., start dependencies)'
+        required: false
+        type: string
+        default: ''
+      container_test_run_args:
+        description: 'Extra flags for docker run in container test (e.g., env vars, volumes, networks)'
+        required: false
+        type: string
+        default: ''
+      container_test_health_url:
+        description: 'HTTP URL to curl for container health verification'
+        required: false
+        type: string
+        default: ''
+
+      # Security and quality
+      enable_security_scan:
+        description: 'Enable security scanning with Trivy'
+        required: false
+        type: boolean
+        default: true
+      enable_sbom:
+        description: 'Generate Software Bill of Materials'
+        required: false
+        type: boolean
+        default: true
+      enable_code_analysis:
+        description: 'Enable code analysis (svelte-check, build verification, trivy)'
+        required: false
+        type: boolean
+        default: true
+
+      # Deployment
+      enable_auto_version:
+        description: 'Enable automatic version increment'
+        required: false
+        type: boolean
+        default: true
+      push_on_main:
+        description: 'Push images when merging to main branch'
+        required: false
+        type: boolean
+        default: true
+      push_to_dockerhub:
+        description: 'Push images to Docker Hub (in addition to GHCR)'
+        required: false
+        type: boolean
+        default: false
+      main_branch:
+        description: 'Main branch name used for push gating (e.g., main or master)'
+        required: false
+        type: string
+        default: 'main'
+
+env:
+  REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
+  REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
+
+jobs:
+  # Job 1: Check for code changes
+  check-changes:
+    name: Check for Code Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code-changed: ${{ steps.changes.outputs.code-changed }}
+      workflow-changed: ${{ steps.changes.outputs.workflow-changed }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check for code changes
+        id: changes
+        uses: mac-lucky/actions-shared-workflows/.github/actions/check-code-changes@master
+        with:
+          file_patterns: '\.(ts|js|svelte|css|html)$|package\.json|bun\.lock|Dockerfile|^src/'
+          event_name: ${{ github.event_name }}
+          detect_workflow_changes: 'true'
+
+  # Job 2: Setup Build Environment
+  setup:
+    name: Setup Build Environment
+    runs-on: ubuntu-latest
+    needs: check-changes
+    outputs:
+      node-version: ${{ steps.node-version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Extract Node version
+        id: node-version
+        run: |
+          NODE_VERSION=""
+
+          # Try to extract from Dockerfile first (e.g., FROM node:22-alpine)
+          if [ -f "${{ inputs.dockerfile_path }}" ]; then
+            NODE_VERSION=$(grep -E '^FROM.*node:' ${{ inputs.dockerfile_path }} | head -1 | sed -E 's/.*node:([0-9]+).*/\1/')
+          fi
+
+          # Fallback to input default
+          if [ -z "$NODE_VERSION" ]; then
+            NODE_VERSION="${{ inputs.node_version }}"
+          fi
+
+          echo "Found Node version: $NODE_VERSION"
+          echo "version=$NODE_VERSION" >> $GITHUB_OUTPUT
+
+  # Job 3: Code Quality & Security Analysis (parallel matrix)
+  code-analysis:
+    name: Code Analysis (${{ matrix.tool }})
+    runs-on: ubuntu-latest
+    needs: [check-changes, setup]
+    if: ${{ inputs.enable_code_analysis }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: svelte-check
+            name: Svelte Check
+          - tool: build-check
+            name: Build Check
+          - tool: trivy
+            name: Trivy Security Scan
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        if: ${{ matrix.tool != 'trivy' && inputs.package_manager == 'bun' }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Node.js
+        if: ${{ matrix.tool != 'trivy' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ needs.setup.outputs.node-version }}
+
+      - name: Install dependencies
+        if: ${{ matrix.tool != 'trivy' }}
+        working-directory: ${{ inputs.build_context }}
+        run: |
+          if [ "${{ inputs.package_manager }}" = "bun" ]; then
+            bun install --frozen-lockfile 2>/dev/null || bun install
+          else
+            npm ci 2>/dev/null || npm install
+          fi
+
+      - name: Run svelte-check
+        if: matrix.tool == 'svelte-check'
+        working-directory: ${{ inputs.build_context }}
+        run: |
+          if OUTPUT=$(npx svelte-check --tsconfig ./tsconfig.json 2>&1); then
+            echo "## :white_check_mark: Svelte Check" >> $GITHUB_STEP_SUMMARY
+            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :x: Svelte Check" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Run build check
+        if: matrix.tool == 'build-check'
+        working-directory: ${{ inputs.build_context }}
+        run: |
+          if [ "${{ inputs.package_manager }}" = "bun" ]; then
+            BUILD_CMD="bun run build"
+          else
+            BUILD_CMD="npm run build"
+          fi
+
+          if OUTPUT=$($BUILD_CMD 2>&1); then
+            echo "## :white_check_mark: Build Check" >> $GITHUB_STEP_SUMMARY
+            echo "Build completed successfully." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :x: Build Check" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Run Trivy vulnerability scanner
+        if: matrix.tool == 'trivy' && inputs.enable_security_scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: ${{ inputs.build_context }}
+          format: "table"
+          output: "trivy-results.txt"
+
+      - name: Trivy job summary
+        if: matrix.tool == 'trivy' && inputs.enable_security_scan && always()
+        run: |
+          if [ ! -s trivy-results.txt ]; then
+            echo "## :white_check_mark: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :shield: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # Job 4: Build Container Image
+  build-container:
+    name: Build Container Image
+    runs-on: ubuntu-latest
+    needs: [check-changes, setup, code-analysis]
+    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') }}
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          tags: ${{ inputs.app_name }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: false
+          load: true
+
+      - name: Save container image
+        if: ${{ inputs.enable_container_tests }}
+        run: |
+          docker save ${{ inputs.app_name }}:test | \
+            gzip > /tmp/${{ inputs.app_name }}.tar.gz
+
+      - name: Upload container artifact
+        if: ${{ inputs.enable_container_tests }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: /tmp/${{ inputs.app_name }}.tar.gz
+          retention-days: 1
+
+  # Job 5: Container Integration Tests
+  container-test:
+    name: Container Integration Test
+    runs-on: ubuntu-latest
+    needs: [check-changes, setup, build-container]
+    if: ${{ inputs.enable_container_tests && needs.build-container.result == 'success' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download container artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+          path: /tmp
+
+      - name: Container health check
+        uses: mac-lucky/actions-shared-workflows/.github/actions/container-healthcheck@master
+        with:
+          image_tar: /tmp/${{ inputs.app_name }}.tar.gz
+          container_name: ${{ inputs.app_name }}
+          enable_security_scan: ${{ inputs.enable_security_scan }}
+          pre_test_script: ${{ inputs.container_test_pre_script }}
+          docker_run_args: ${{ inputs.container_test_run_args }}
+          health_check_url: ${{ inputs.container_test_health_url }}
+
+  # Job 6: Build platform-specific images in parallel (native runners with QEMU fallback for private repos)
+  build:
+    name: Build (${{ matrix.platform }})
+    # Use native ARM runner for public repos, fallback to QEMU on ubuntu-latest for private repos
+    runs-on: ${{ (matrix.platform == 'linux/arm64' && github.event.repository.private) && 'ubuntu-latest' || matrix.runner }}
+    needs: [check-changes, setup, build-container, container-test]
+    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped')) }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    outputs:
+      new-version: ${{ steps.set_version.outputs.new_version }}
+    steps:
+      - name: Prepare platform pair
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up QEMU (fallback for private repos)
+        if: ${{ matrix.platform == 'linux/arm64' && github.event.repository.private }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: ${{ inputs.push_to_dockerhub }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Get latest version tag
+        if: ${{ inputs.enable_auto_version }}
+        id: get_latest_version
+        run: |
+          # Extract image name from GHCR URL (e.g., ghcr.io/mac-lucky/app-name -> app-name)
+          IMAGE_NAME=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|.*/||')
+          OWNER=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
+
+          # Get tags from GHCR using GitHub API
+          LATEST_TAG=$(curl -s \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
+            jq -r '.[].metadata.container.tags[]' | \
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+            sort -V | tail -n 1 || echo "")
+          echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
+
+      - name: Set version
+        id: set_version
+        run: |
+          if [ "${{ inputs.enable_auto_version }}" = "true" ]; then
+            VERSION=${{ env.LATEST_TAG }}
+            if [ -z "$VERSION" ]; then
+              NEW_VERSION="0.1.0"
+            else
+              NEW_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF++;print}')
+            fi
+          else
+            # Use git tag or default version
+            NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.1.0")
+          fi
+          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
+          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          tags: |
+            type=raw,value=${{ env.NEW_VERSION }}
+            type=raw,value=latest
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NODE_VERSION=${{ needs.setup.outputs.node-version }}
+            VERSION=${{ env.NEW_VERSION }}
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE_GHCR }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p ${{ runner.temp }}/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Job 7: Merge platform-specific images into multi-arch manifest
+  merge:
+    name: Create Multi-arch Manifest
+    runs-on: ubuntu-latest
+    needs: [check-changes, setup, build]
+    if: ${{ always() && needs.build.result == 'success' && ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare version
+        run: |
+          echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> $GITHUB_ENV
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          tags: |
+            type=raw,value=${{ env.NEW_VERSION }}
+            type=raw,value=latest
+
+      - name: Log in to Docker Hub
+        if: ${{ inputs.push_to_dockerhub }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Create manifest list and push (GHCR)
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+
+      - name: Create manifest list and push (Docker Hub)
+        if: ${{ inputs.push_to_dockerhub }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }} \
+            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest \
+            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
+
+      - name: Generate SBOM
+        if: ${{ inputs.enable_sbom }}
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        if: ${{ inputs.enable_sbom }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
+  # Job 8: Post-deployment verification
+  post-deploy-verify:
+    name: Post-deployment Verification
+    runs-on: ubuntu-latest
+    needs: [check-changes, merge]
+    if: ${{ always() && needs.merge.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.workflow-changed != 'true' }}
+    steps:
+      - name: Verify deployed image
+        uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@master
+        with:
+          registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
+          github_token: ${{ github.token }}

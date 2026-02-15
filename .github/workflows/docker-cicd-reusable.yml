@@ -111,9 +111,13 @@ jobs:
         run: |
           BUILD_NEEDED="false"
           UPSTREAM_VERSION=""
-          
+
+          # Never push images for pull requests
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "pull_request_target" ]; then
+            echo "🔍 Pull request - no image push needed"
+            BUILD_NEEDED="false"
           # Force build for manual triggers or when version check is disabled
-          if [ "${{ inputs.force_build }}" = "true" ] || [ "${{ inputs.enable_version_check }}" = "false" ]; then
+          elif [ "${{ inputs.force_build }}" = "true" ] || [ "${{ inputs.enable_version_check }}" = "false" ]; then
             echo "🔨 Force build enabled or version check disabled"
             BUILD_NEEDED="true"
           # For workflow_dispatch, always build unless version check explicitly prevents it
