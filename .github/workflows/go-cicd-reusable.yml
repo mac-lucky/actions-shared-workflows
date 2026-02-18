@@ -319,18 +319,64 @@ jobs:
       - name: Run tests
         working-directory: ${{ inputs.go_module_path }}
         run: |
-          if OUTPUT=$(go test ${{ inputs.go_test_args }} ./... 2>&1); then
+          set +e
+          OUTPUT=$(go test ${{ inputs.go_test_args }} ./... 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          # Count individual test results (available with -v flag)
+          PASSED=$(echo "$OUTPUT" | grep -c '^--- PASS:' || true)
+          FAILED=$(echo "$OUTPUT" | grep -c '^--- FAIL:' || true)
+          SKIPPED=$(echo "$OUTPUT" | grep -c '^--- SKIP:' || true)
+          TOTAL=$((PASSED + FAILED + SKIPPED))
+
+          # Header
+          if [ $EXIT_CODE -eq 0 ]; then
             echo "## :white_check_mark: Go Tests" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
           else
             echo "## :x: Go Tests" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit 1
           fi
+
+          # Summary counts (only when -v output is present)
+          if [ $TOTAL -gt 0 ]; then
+            echo "> **${PASSED} passed** · ${FAILED} failed · ${SKIPPED} skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Package results table
+          PKG_LINES=$(echo "$OUTPUT" | grep -E '^(ok|FAIL|\?)\s' || true)
+          if [ -n "$PKG_LINES" ]; then
+            echo "| Package | Status | Duration |" >> $GITHUB_STEP_SUMMARY
+            echo "|---------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r line; do
+              STATUS=$(echo "$line" | awk '{print $1}')
+              PKG=$(echo "$line" | awk '{print $2}')
+              DUR=$(echo "$line" | grep -oE '[0-9]+\.[0-9]+s' | head -1)
+              if [ "$STATUS" = "ok" ]; then
+                echo "| \`${PKG}\` | :white_check_mark: pass | ${DUR:-—} |" >> $GITHUB_STEP_SUMMARY
+              elif [ "$STATUS" = "FAIL" ]; then
+                echo "| \`${PKG}\` | :x: fail | ${DUR:-—} |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| \`${PKG}\` | :package: no tests | — |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done <<< "$PKG_LINES"
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Full output: collapsible on pass, visible on fail
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "<details><summary>Full output</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          exit $EXIT_CODE
 
   # Job 4: Build Container Image
   build-container:
