@@ -207,6 +207,7 @@ jobs:
     name: Code Analysis (${{ matrix.tool }})
     runs-on: ubuntu-latest
     needs: [check-changes, setup]
+    if: ${{ github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -298,7 +299,7 @@ jobs:
     name: Go Tests
     runs-on: ubuntu-latest
     needs: [check-changes, setup]
-    if: ${{ inputs.enable_go_tests }}
+    if: ${{ inputs.enable_go_tests && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -383,7 +384,7 @@ jobs:
     name: Build Container Image
     runs-on: ubuntu-latest
     needs: [check-changes, setup, code-analysis, go-test]
-    if: ${{ always() && needs.code-analysis.result == 'success' && (needs.go-test.result == 'success' || needs.go-test.result == 'skipped') }}
+    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (needs.go-test.result == 'success' || needs.go-test.result == 'skipped') && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:

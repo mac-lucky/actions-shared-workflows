@@ -192,7 +192,7 @@ jobs:
     name: Code Analysis (${{ matrix.tool }})
     runs-on: ubuntu-latest
     needs: [check-changes, setup]
-    if: ${{ inputs.enable_code_analysis }}
+    if: ${{ inputs.enable_code_analysis && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -319,7 +319,7 @@ jobs:
     name: Build Container Image
     runs-on: ubuntu-latest
     needs: [check-changes, setup, code-analysis]
-    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') }}
+    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
