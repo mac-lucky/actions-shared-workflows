@@ -554,7 +554,7 @@ jobs:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     needs: [check-changes, setup, build-container, container-test, kubernetes-test]
-    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped')) }}
+    if: ${{ always() && needs.build-container.result == 'success' && ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
     permissions:
       contents: read
       packages: write
