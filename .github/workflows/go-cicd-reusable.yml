@@ -158,6 +158,23 @@ on:
         type: string
         default: 'master'
 
+      # Runner configuration
+      runner_default:
+        description: 'Default runner for CI jobs (e.g., ubuntu-latest or self-hosted)'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      runner_amd64:
+        description: 'Runner for amd64 builds (e.g., ubuntu-latest or self-hosted)'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      runner_arm64:
+        description: 'Runner for arm64 builds (e.g., ubuntu-24.04-arm or self-hosted)'
+        required: false
+        type: string
+        default: 'ubuntu-24.04-arm'
+
 env:
   REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
   REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
@@ -166,7 +183,7 @@ jobs:
   # Job 1: Check for code changes
   check-changes:
     name: Check for Code Changes
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     outputs:
       code-changed: ${{ steps.changes.outputs.code-changed }}
     steps:
@@ -184,7 +201,7 @@ jobs:
 
   setup:
     name: Setup Build Environment
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: check-changes
     outputs:
       go-version: ${{ steps.go-version.outputs.version }}
@@ -205,7 +222,7 @@ jobs:
   # Job 3: Code Quality & Security Analysis (parallel matrix)
   code-analysis:
     name: Code Analysis (${{ matrix.tool }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup]
     if: ${{ github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true' }}
     strategy:
@@ -297,7 +314,7 @@ jobs:
   # Job 3b: Go Tests (optional)
   go-test:
     name: Go Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup]
     if: ${{ inputs.enable_go_tests && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     steps:
@@ -382,7 +399,7 @@ jobs:
   # Job 4: Build Container Image
   build-container:
     name: Build Container Image
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, code-analysis, go-test]
     if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (needs.go-test.result == 'success' || needs.go-test.result == 'skipped') && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     outputs:
@@ -425,7 +442,7 @@ jobs:
   # Job 5: Container Integration Tests
   container-test:
     name: Container Integration Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_container_tests }}
     steps:
@@ -451,7 +468,7 @@ jobs:
   # Job 6: Kubernetes Integration Tests (Optional)
   kubernetes-test:
     name: Kubernetes Integration Test
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' }}
     steps:
@@ -563,9 +580,9 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: ${{ inputs.runner_amd64 }}
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: ${{ inputs.runner_arm64 }}
     outputs:
       new-version: ${{ steps.set_version.outputs.new_version }}
     steps:
@@ -576,6 +593,9 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -673,7 +693,7 @@ jobs:
   # Job 8: Merge platform-specific images into multi-arch manifest
   merge:
     name: Create Multi-arch Manifest
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, build]
     if: ${{ always() && needs.build.result == 'success' && ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' }}
     permissions:
@@ -756,7 +776,7 @@ jobs:
   # Job 9: Post-deployment verification
   post-deploy-verify:
     name: Post-deployment Verification
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, merge]
     if: ${{ always() && needs.merge.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
     steps:
