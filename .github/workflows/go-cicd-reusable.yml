@@ -126,7 +126,7 @@ on:
 
       # Security and quality
       enable_security_scan:
-        description: 'Enable security scanning with Trivy'
+        description: 'Enable security scanning with Grype'
         required: false
         type: boolean
         default: true
@@ -238,8 +238,8 @@ jobs:
             name: Go Vet
           - tool: staticcheck
             name: Staticcheck
-          - tool: trivy
-            name: Trivy Security Scan
+          - tool: grype
+            name: Grype Security Scan
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -294,25 +294,25 @@ jobs:
             exit 1
           fi
 
-      - name: Run Trivy vulnerability scanner
-        if: matrix.tool == 'trivy' && inputs.enable_security_scan
-        uses: aquasecurity/trivy-action@master
+      - name: Run Grype vulnerability scanner
+        if: matrix.tool == 'grype' && inputs.enable_security_scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
-          scan-type: "fs"
-          scan-ref: ${{ inputs.go_module_path }}
-          format: "table"
-          output: "trivy-results.txt"
+          path: ${{ inputs.go_module_path }}
+          output-format: "table"
+          output-file: "grype-results.txt"
+          fail-build: "false"
 
-      - name: Trivy job summary
-        if: matrix.tool == 'trivy' && inputs.enable_security_scan && always()
+      - name: Grype job summary
+        if: matrix.tool == 'grype' && inputs.enable_security_scan && always()
         run: |
-          if [ ! -s trivy-results.txt ]; then
-            echo "## :white_check_mark: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+          if [ ! -s grype-results.txt ]; then
+            echo "## :white_check_mark: Grype Security Scan" >> $GITHUB_STEP_SUMMARY
             echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
           else
-            echo "## :shield: Trivy Security Scan" >> $GITHUB_STEP_SUMMARY
+            echo "## :shield: Grype Security Scan" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            cat trivy-results.txt >> $GITHUB_STEP_SUMMARY
+            cat grype-results.txt >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 

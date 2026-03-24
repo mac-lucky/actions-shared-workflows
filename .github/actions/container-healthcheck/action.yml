@@ -9,7 +9,7 @@ inputs:
     description: Name for running container
     required: true
   enable_security_scan:
-    description: Run Trivy security scan
+    description: Run Grype security scan
     required: false
     default: 'true'
   pre_test_script:
@@ -92,9 +92,9 @@ runs:
 
     - name: Container security scan
       if: ${{ inputs.enable_security_scan == 'true' }}
-      uses: aquasecurity/trivy-action@master
+      uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
       with:
-        image-ref: "${{ inputs.container_name }}:test"
-        format: "table"
-        exit-code: "0"
-        ignore-unfixed: true
+        image: "${{ inputs.container_name }}:test"
+        output-format: "table"
+        fail-build: "false"
+        only-fixed: "true"
