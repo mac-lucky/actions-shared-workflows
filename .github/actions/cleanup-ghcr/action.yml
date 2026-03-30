@@ -1,0 +1,93 @@
+name: Cleanup GHCR
+description: Delete untagged GHCR versions not referenced by any tagged manifest list
+
+inputs:
+  registry_image:
+    description: Full GHCR image URL (e.g., ghcr.io/owner/image-name)
+    required: true
+  github_token:
+    description: GitHub token with packages:write permission
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Cleanup untagged versions
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        REGISTRY_IMAGE: ${{ inputs.registry_image }}
+      run: |
+        set -euo pipefail
+
+        IMAGE_NAME=$(echo "$REGISTRY_IMAGE" | sed 's|.*/||')
+        OWNER=$(echo "$REGISTRY_IMAGE" | sed 's|ghcr.io/||' | sed 's|/.*||')
+
+        echo "Cleaning up untagged versions for $OWNER/$IMAGE_NAME..."
+
+        # Get all versions via GitHub Packages API
+        VERSIONS=$(curl -s \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100")
+
+        VERSION_COUNT=$(echo "$VERSIONS" | jq 'length')
+        if [ "$VERSION_COUNT" -eq 0 ]; then
+          echo "No versions found"
+          exit 0
+        fi
+
+        # Collect tagged version digests
+        TAGGED_DIGESTS=$(echo "$VERSIONS" | jq -r '.[] | select(.metadata.container.tags | length > 0) | .name')
+
+        if [ -z "$TAGGED_DIGESTS" ]; then
+          echo "No tagged versions found, skipping cleanup"
+          exit 0
+        fi
+
+        # Get GHCR registry token for manifest inspection
+        GHCR_TOKEN=$(curl -s -u "$OWNER:$GH_TOKEN" \
+          "https://ghcr.io/token?scope=repository:$OWNER/$IMAGE_NAME:pull" \
+          | jq -r '.token')
+
+        # For each tagged manifest list, collect referenced child digests
+        PROTECTED_FILE=$(mktemp)
+        for digest in $TAGGED_DIGESTS; do
+          echo "$digest" >> "$PROTECTED_FILE"
+          curl -s \
+            -H "Authorization: Bearer $GHCR_TOKEN" \
+            -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/$OWNER/$IMAGE_NAME/manifests/$digest" \
+            | jq -r '.manifests[]?.digest // empty' >> "$PROTECTED_FILE" 2>/dev/null || true
+        done
+
+        sort -u -o "$PROTECTED_FILE" "$PROTECTED_FILE"
+        PROTECTED_COUNT=$(wc -l < "$PROTECTED_FILE" | tr -d ' ')
+
+        # Delete untagged versions not in the protected set
+        DELETED=0
+        FAILED=0
+        while IFS=$'\t' read -r vid vname; do
+          if ! grep -qF "$vname" "$PROTECTED_FILE"; then
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions/$vid")
+            if [ "$HTTP_CODE" = "204" ]; then
+              DELETED=$((DELETED + 1))
+            else
+              FAILED=$((FAILED + 1))
+            fi
+          fi
+        done < <(echo "$VERSIONS" | jq -r '.[] | select(.metadata.container.tags | length == 0) | [.id, .name] | @tsv')
+
+        rm -f "$PROTECTED_FILE"
+
+        echo "### GHCR Cleanup: $IMAGE_NAME" >> $GITHUB_STEP_SUMMARY
+        echo "Deleted **$DELETED** untagged versions (protected: $PROTECTED_COUNT, failed: $FAILED)" >> $GITHUB_STEP_SUMMARY
+
+        if [ "$FAILED" -gt 0 ]; then
+          echo "::warning::$FAILED deletions failed — check package admin permissions"
+        fi
+
+        echo "Deleted $DELETED untagged versions (protected: $PROTECTED_COUNT, failed: $FAILED)"
