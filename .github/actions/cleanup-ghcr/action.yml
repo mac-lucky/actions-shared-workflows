@@ -25,11 +25,24 @@ runs:
 
         echo "Cleaning up untagged versions for $OWNER/$IMAGE_NAME..."
 
-        # Get all versions via GitHub Packages API
-        VERSIONS=$(curl -s \
+        # Get all versions via GitHub Packages API (most recent 100)
+        VERSIONS=$(curl -s -w "\n%{http_code}" \
           -H "Authorization: Bearer $GH_TOKEN" \
           -H "Accept: application/vnd.github+json" \
           "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100")
+
+        HTTP_CODE=$(echo "$VERSIONS" | tail -1)
+        VERSIONS=$(echo "$VERSIONS" | sed '$d')
+
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "::warning::Failed to list versions (HTTP $HTTP_CODE), skipping cleanup"
+          exit 0
+        fi
+
+        if ! echo "$VERSIONS" | jq -e 'type == "array"' > /dev/null 2>&1; then
+          echo "::warning::Unexpected API response, skipping cleanup"
+          exit 0
+        fi
 
         VERSION_COUNT=$(echo "$VERSIONS" | jq 'length')
         if [ "$VERSION_COUNT" -eq 0 ]; then
@@ -50,6 +63,11 @@ runs:
           "https://ghcr.io/token?scope=repository:$OWNER/$IMAGE_NAME:pull" \
           | jq -r '.token')
 
+        if [ -z "$GHCR_TOKEN" ] || [ "$GHCR_TOKEN" = "null" ]; then
+          echo "::error::Failed to obtain GHCR registry token — aborting to prevent accidental deletion"
+          exit 1
+        fi
+
         # For each tagged manifest list, collect referenced child digests
         PROTECTED_FILE=$(mktemp)
         for digest in $TAGGED_DIGESTS; do
@@ -68,7 +86,7 @@ runs:
         DELETED=0
         FAILED=0
         while IFS=$'\t' read -r vid vname; do
-          if ! grep -qF "$vname" "$PROTECTED_FILE"; then
+          if ! grep -qxF "$vname" "$PROTECTED_FILE"; then
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
