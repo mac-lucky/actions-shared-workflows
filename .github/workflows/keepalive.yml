@@ -1,0 +1,24 @@
+name: Keepalive All Repos
+
+on:
+  schedule:
+    - cron: '0 0 1 * *' # Runs on the 1st of every month
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-enable scheduled workflows across repos
+        env:
+          GH_TOKEN: ${{ secrets.KEEPALIVE_PAT }}
+        run: |
+          repos=$(gh repo list mac-lucky --json name --jq '.[].name' --limit 100)
+          for repo in $repos; do
+            workflows=$(gh api "repos/mac-lucky/$repo/actions/workflows" \
+              --jq '.workflows[] | select(.state == "disabled_inactivity") | .id' 2>/dev/null)
+            for wf in $workflows; do
+              echo "Re-enabling workflow $wf in $repo"
+              gh api -X PUT "repos/mac-lucky/$repo/actions/workflows/$wf/enable"
+            done
+          done
