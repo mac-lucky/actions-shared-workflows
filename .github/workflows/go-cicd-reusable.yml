@@ -238,6 +238,10 @@ jobs:
             name: Go Vet
           - tool: staticcheck
             name: Staticcheck
+          - tool: govulncheck
+            name: Go Vulnerability Check
+          - tool: gosec
+            name: Go Security Scanner
           - tool: grype
             name: Grype Security Scan
     steps:
@@ -288,6 +292,43 @@ jobs:
             echo "No issues found." >> $GITHUB_STEP_SUMMARY
           else
             echo "## :x: Staticcheck" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Run govulncheck
+        if: matrix.tool == 'govulncheck'
+        working-directory: ${{ inputs.go_module_path }}
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          if OUTPUT=$(govulncheck ./... 2>&1); then
+            echo "## :white_check_mark: Go Vulnerability Check" >> $GITHUB_STEP_SUMMARY
+            echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :x: Go Vulnerability Check" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Run gosec
+        if: matrix.tool == 'gosec'
+        working-directory: ${{ inputs.go_module_path }}
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          set +e
+          OUTPUT=$(gosec -fmt text ./... 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "## :white_check_mark: Go Security Scanner" >> $GITHUB_STEP_SUMMARY
+            echo "No issues found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## :warning: Go Security Scanner" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
