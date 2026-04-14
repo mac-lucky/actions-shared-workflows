@@ -1,0 +1,75 @@
+---
+name: Reusable golangci-lint Workflow
+
+on:
+  workflow_call:
+    inputs:
+      go_version:
+        description: 'Go version (e.g., 1.26.2). If empty, extracted from go.work or go.mod.'
+        required: false
+        type: string
+        default: ''
+      golangci_lint_version:
+        description: 'golangci-lint version (e.g., v2.11.4 or latest)'
+        required: false
+        type: string
+        default: 'latest'
+      args:
+        description: 'Extra arguments for golangci-lint run'
+        required: false
+        type: string
+        default: '--timeout=10m'
+      working_directory:
+        description: 'Working directory for lint (default: repo root)'
+        required: false
+        type: string
+        default: '.'
+      cache_dependency_path:
+        description: 'Glob or path for go.sum files used by setup-go cache'
+        required: false
+        type: string
+        default: '**/go.sum'
+      runner:
+        description: 'Runner for the lint job'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve Go version
+        id: go-version
+        run: |
+          if [ -n "${{ inputs.go_version }}" ]; then
+            echo "version=${{ inputs.go_version }}" >> "$GITHUB_OUTPUT"
+          elif [ -f go.work ]; then
+            V=$(grep "^go " go.work | awk '{print $2}')
+            echo "version=$V" >> "$GITHUB_OUTPUT"
+          elif [ -f go.mod ]; then
+            V=$(grep "^go " go.mod | awk '{print $2}')
+            echo "version=$V" >> "$GITHUB_OUTPUT"
+          else
+            echo "No go.work or go.mod found at repo root" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+          cache-dependency-path: ${{ inputs.cache_dependency_path }}
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ inputs.golangci_lint_version }}
+          args: ${{ inputs.args }}
+          working-directory: ${{ inputs.working_directory }}
+          only-new-issues: ${{ github.event_name == 'pull_request' }}
