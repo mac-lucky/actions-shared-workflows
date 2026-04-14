@@ -20,7 +20,7 @@ on:
         type: string
         default: '--timeout=10m'
       working_directory:
-        description: 'Working directory for lint (default: repo root)'
+        description: 'Working directory for single-module repos (ignored when go.work is present)'
         required: false
         type: string
         default: '.'
@@ -40,36 +40,66 @@ permissions:
   pull-requests: read
 
 jobs:
-  lint:
+  discover:
+    name: Discover modules
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
+    outputs:
+      go_version: ${{ steps.resolve.outputs.go_version }}
+      modules: ${{ steps.resolve.outputs.modules }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Resolve Go version
-        id: go-version
+      - name: Resolve Go version and modules
+        id: resolve
         run: |
+          set -euo pipefail
+
           if [ -n "${{ inputs.go_version }}" ]; then
-            echo "version=${{ inputs.go_version }}" >> "$GITHUB_OUTPUT"
+            GO_VERSION="${{ inputs.go_version }}"
           elif [ -f go.work ]; then
-            V=$(grep "^go " go.work | awk '{print $2}')
-            echo "version=$V" >> "$GITHUB_OUTPUT"
-          elif [ -f go.mod ]; then
-            V=$(grep "^go " go.mod | awk '{print $2}')
-            echo "version=$V" >> "$GITHUB_OUTPUT"
+            GO_VERSION=$(awk 'NR==1 && $1=="go" {print $2; exit}' go.work)
+          elif [ -f "${{ inputs.working_directory }}/go.mod" ]; then
+            GO_VERSION=$(awk '$1=="go" {print $2; exit}' "${{ inputs.working_directory }}/go.mod")
           else
-            echo "No go.work or go.mod found at repo root" >&2
+            echo "No go.work or go.mod found" >&2
             exit 1
           fi
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ -f go.work ]; then
+            # Extract `use ./path` and multi-line `use ( ... )` blocks
+            MODS=$(awk '
+              /^use \(/ {inblock=1; next}
+              inblock && /^\)/ {inblock=0; next}
+              /^use / {print $2; next}
+              inblock && NF {print $1}
+            ' go.work | jq -R . | jq -sc .)
+          else
+            MODS=$(printf '%s\n' "${{ inputs.working_directory }}" | jq -R . | jq -sc .)
+          fi
+          echo "modules=$MODS" >> "$GITHUB_OUTPUT"
+          echo "Linting modules: $MODS"
+
+  lint:
+    name: Lint (${{ matrix.module }})
+    runs-on: ${{ inputs.runner }}
+    needs: discover
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.discover.outputs.modules) }}
+    steps:
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ steps.go-version.outputs.version }}
+          go-version: ${{ needs.discover.outputs.go_version }}
           cache-dependency-path: ${{ inputs.cache_dependency_path }}
 
       - uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ inputs.golangci_lint_version }}
           args: ${{ inputs.args }}
-          working-directory: ${{ inputs.working_directory }}
+          working-directory: ${{ matrix.module }}
           only-new-issues: ${{ github.event_name == 'pull_request' }}
