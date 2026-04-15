@@ -819,6 +819,7 @@ jobs:
         with:
           name: sbom
           path: sbom.spdx.json
+          retention-days: 7
 
   # Job 9: Post-deployment verification
   post-deploy-verify:
