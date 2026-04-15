@@ -1,0 +1,56 @@
+name: Scheduled GHCR Cleanup
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 3am Warsaw (CEST) / 2am (CET)
+  workflow_dispatch:
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  cleanup:
+    name: Cleanup ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        image:
+          - bambulab-timelapse-downloader
+          - bazarr-auto-translate
+          - caddy-cloudflare
+          - claude-code
+          - derper
+          - firecrawl-mcp-proxy
+          - gocryptfs-docker
+          - homeassistant-mcp
+          - homelab-doctor
+          - kubernetes-ping-exporter
+          - mariadb-custom-metrics-exporter
+          - nodered-mcp-server
+          - portfolio
+          - pushward-admin
+          - pushward-bambulab
+          - pushward-github
+          - pushward-grafana
+          - pushward-relay
+          - pushward-sabnzbd
+          - pushward-server
+          - pushward-unraid
+          - pushward-web
+          - tailscale-check
+          - tcp-endpoint-check-exporter
+          - ux-ui-site
+          - webhook-capture
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cleanup untagged versions
+        uses: ./.github/actions/cleanup-ghcr
+        with:
+          registry_image: ghcr.io/mac-lucky/${{ matrix.image }}
+          github_token: ${{ secrets.GHCR_CLEANUP_TOKEN }}

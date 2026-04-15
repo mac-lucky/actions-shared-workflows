@@ -832,19 +832,3 @@ jobs:
         with:
           registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
           github_token: ${{ github.token }}
-
-  # Job 10: Cleanup untagged GHCR versions
-  cleanup-ghcr:
-    name: Cleanup GHCR
-    runs-on: ${{ inputs.runner_default }}
-    needs: [merge, post-deploy-verify]
-    if: ${{ always() && needs.merge.result == 'success' }}
-    continue-on-error: true
-    permissions:
-      packages: write
-    steps:
-      - name: Cleanup untagged versions
-        uses: mac-lucky/actions-shared-workflows/.github/actions/cleanup-ghcr@master
-        with:
-          registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
-          github_token: ${{ github.token }}

@@ -439,19 +439,3 @@ jobs:
           docker pull ${{ env.REGISTRY_IMAGE_GHCR }}:latest
 
           echo "✅ Image verification successful"
-
-  # Job 5: Cleanup untagged GHCR versions
-  cleanup-ghcr:
-    name: Cleanup GHCR
-    runs-on: ubuntu-latest
-    needs: [merge, post-deploy-verify]
-    if: ${{ always() && needs.merge.result == 'success' }}
-    continue-on-error: true
-    permissions:
-      packages: write
-    steps:
-      - name: Cleanup untagged versions
-        uses: mac-lucky/actions-shared-workflows/.github/actions/cleanup-ghcr@master
-        with:
-          registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
-          github_token: ${{ github.token }}
