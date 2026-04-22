@@ -152,7 +152,7 @@ jobs:
         id: changes
         uses: mac-lucky/actions-shared-workflows/.github/actions/check-code-changes@master
         with:
-          file_patterns: '\.(ts|js|svelte|css|html)$|package\.json|bun\.lock|Dockerfile|^src/'
+          file_patterns: '\.(ts|js|svelte|css|html)$|package\.json|bun\.lock|Dockerfile|^src/|^messages/|^project\.inlang/|^static/'
           event_name: ${{ github.event_name }}
           detect_workflow_changes: 'true'
 
