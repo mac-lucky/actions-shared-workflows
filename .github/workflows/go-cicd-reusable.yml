@@ -142,6 +142,16 @@ on:
         required: false
         type: boolean
         default: true
+      enable_main_dev_tag:
+        description: 'On main pushes, publish :main + :main-<short-sha> instead of auto-bumping a patch version. Mutually exclusive with enable_auto_version (this takes precedence).'
+        required: false
+        type: boolean
+        default: false
+      release_on_tag:
+        description: 'Build and publish on refs/tags/* pushes using semver tags (X.Y.Z, X.Y, X for >=1.0, latest). Tag may be plain "v<semver>" or prefixed "<name>/v<semver>" (the prefix is stripped before semver parsing).'
+        required: false
+        type: boolean
+        default: false
       push_on_main:
         description: 'Push images when merging to main branch'
         required: false
@@ -229,7 +239,7 @@ jobs:
     name: Code Analysis (${{ matrix.tool }})
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup]
-    if: ${{ github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true' }}
+    if: ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -362,7 +372,7 @@ jobs:
     name: Go Tests
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup]
-    if: ${{ inputs.enable_go_tests && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
+    if: ${{ inputs.enable_go_tests && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -447,7 +457,7 @@ jobs:
     name: Build Container Image
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, code-analysis, go-test]
-    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (needs.go-test.result == 'success' || needs.go-test.result == 'skipped') && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
+    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (needs.go-test.result == 'success' || needs.go-test.result == 'skipped') && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -617,7 +627,7 @@ jobs:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     needs: [check-changes, setup, build-container, container-test, kubernetes-test]
-    if: ${{ always() && needs.build-container.result == 'success' && ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
+    if: ${{ always() && needs.build-container.result == 'success' && (((github.event_name == 'push' && inputs.push_on_main) && github.ref == format('refs/heads/{0}', inputs.main_branch)) || (github.event_name == 'push' && inputs.release_on_tag && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
     permissions:
       contents: read
       packages: write
@@ -662,8 +672,23 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
 
-      - name: Get latest version tag
-        if: ${{ inputs.enable_auto_version }}
+      - name: Compute release version (tag push)
+        if: ${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+        id: rel
+        run: |
+          REF="${GITHUB_REF#refs/tags/}"
+          SEMVER_TAG="${REF##*/}"
+          VERSION="${SEMVER_TAG#v}"
+          MAJOR_MINOR="${VERSION%.*}"
+          MAJOR="${VERSION%%.*}"
+          if [[ "$MAJOR" == "0" ]]; then IS_PRE_ONE=true; else IS_PRE_ONE=false; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "is_pre_one=$IS_PRE_ONE" >> "$GITHUB_OUTPUT"
+
+      - name: Get latest version tag (auto-version mode)
+        if: ${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag }}
         id: get_latest_version
         run: |
           # Extract image name from GHCR URL (e.g., ghcr.io/mac-lucky/app-name -> app-name)
@@ -683,15 +708,18 @@ jobs:
       - name: Set version
         id: set_version
         run: |
-          if [ "${{ inputs.enable_auto_version }}" = "true" ]; then
-            VERSION=${{ env.LATEST_TAG }}
+          if [ "${{ inputs.release_on_tag }}" = "true" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            NEW_VERSION="${{ steps.rel.outputs.version }}"
+          elif [ "${{ inputs.enable_main_dev_tag }}" = "true" ] && [ "$GITHUB_REF" = "refs/heads/${{ inputs.main_branch }}" ]; then
+            NEW_VERSION="main-${GITHUB_SHA:0:7}"
+          elif [ "${{ inputs.enable_auto_version }}" = "true" ]; then
+            VERSION="${LATEST_TAG}"
             if [ -z "$VERSION" ]; then
               NEW_VERSION="1.0.0"
             else
-              NEW_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF++;print}')
+              NEW_VERSION=$(echo "$VERSION" | awk -F. -v OFS=. '{$NF++;print}')
             fi
           else
-            # Use git tag or default version
             NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
           fi
           echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
@@ -702,9 +730,17 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          flavor: |
+            latest=false
           tags: |
-            type=raw,value=${{ env.NEW_VERSION }}
-            type=raw,value=latest
+            type=raw,value=${{ steps.rel.outputs.version }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.rel.outputs.major_minor }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.rel.outputs.major }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') && steps.rel.outputs.is_pre_one == 'false' }}
+            type=raw,value=latest,enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=main,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
+            type=sha,prefix=main-,format=short,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
+            type=raw,value=${{ env.NEW_VERSION }},enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
+            type=raw,value=latest,enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
 
       - name: Build and push by digest
         id: build
@@ -742,7 +778,7 @@ jobs:
     name: Create Multi-arch Manifest
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, build]
-    if: ${{ always() && needs.build.result == 'success' && ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' }}
+    if: ${{ always() && needs.build.result == 'success' && (((github.event_name == 'push' && inputs.push_on_main) && github.ref == format('refs/heads/{0}', inputs.main_branch)) || (github.event_name == 'push' && inputs.release_on_tag && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
     permissions:
       contents: read
       packages: write
@@ -759,17 +795,37 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Prepare version
+        id: rel
         run: |
-          echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> $GITHUB_ENV
+          NEW_VERSION="${{ needs.build.outputs.new-version }}"
+          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
+          if [[ "$GITHUB_REF" == refs/tags/* ]] && [ "${{ inputs.release_on_tag }}" = "true" ]; then
+            VERSION="$NEW_VERSION"
+            MAJOR_MINOR="${VERSION%.*}"
+            MAJOR="${VERSION%%.*}"
+            if [[ "$MAJOR" == "0" ]]; then IS_PRE_ONE=true; else IS_PRE_ONE=false; fi
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
+            echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+            echo "is_pre_one=$IS_PRE_ONE" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
+          flavor: |
+            latest=false
           tags: |
-            type=raw,value=${{ env.NEW_VERSION }}
-            type=raw,value=latest
+            type=raw,value=${{ steps.rel.outputs.version }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.rel.outputs.major_minor }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.rel.outputs.major }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') && steps.rel.outputs.is_pre_one == 'false' }}
+            type=raw,value=latest,enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=main,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
+            type=sha,prefix=main-,format=short,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
+            type=raw,value=${{ env.NEW_VERSION }},enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
+            type=raw,value=latest,enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
@@ -826,7 +882,7 @@ jobs:
     name: Post-deployment Verification
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, merge]
-    if: ${{ always() && needs.merge.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
+    if: ${{ always() && needs.merge.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == format('refs/heads/{0}', inputs.main_branch) || (inputs.release_on_tag && startsWith(github.ref, 'refs/tags/'))) }}
     steps:
       - name: Verify deployed image
         uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@master
