@@ -313,7 +313,12 @@ jobs:
         working-directory: ${{ inputs.go_module_path }}
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          if OUTPUT=$(govulncheck ./... 2>&1); then
+          set +e
+          OUTPUT=$(govulncheck ./... 2>&1)
+          EXIT_CODE=$?
+          set -e
+          echo "$OUTPUT"
+          if [ $EXIT_CODE -eq 0 ]; then
             echo "## :white_check_mark: Go Vulnerability Check" >> $GITHUB_STEP_SUMMARY
             echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
           else
