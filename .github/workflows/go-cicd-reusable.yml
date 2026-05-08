@@ -641,6 +641,10 @@ jobs:
             runner: ${{ inputs.runner_arm64 }}
     outputs:
       new-version: ${{ steps.set_version.outputs.new_version }}
+      version: ${{ steps.rel.outputs.version }}
+      major_minor: ${{ steps.rel.outputs.major_minor }}
+      major: ${{ steps.rel.outputs.major }}
+      is_pre_one: ${{ steps.rel.outputs.is_pre_one }}
     steps:
       - name: Prepare platform pair
         run: |
@@ -682,10 +686,12 @@ jobs:
           MAJOR_MINOR="${VERSION%.*}"
           MAJOR="${VERSION%%.*}"
           if [[ "$MAJOR" == "0" ]]; then IS_PRE_ONE=true; else IS_PRE_ONE=false; fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
-          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
-          echo "is_pre_one=$IS_PRE_ONE" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "major_minor=$MAJOR_MINOR"
+            echo "major=$MAJOR"
+            echo "is_pre_one=$IS_PRE_ONE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Get latest version tag (auto-version mode)
         if: ${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag }}
@@ -708,22 +714,21 @@ jobs:
       - name: Set version
         id: set_version
         run: |
-          if [ "${{ inputs.release_on_tag }}" = "true" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          if [[ "${{ inputs.release_on_tag }}" == "true" && "$GITHUB_REF" == refs/tags/* ]]; then
             NEW_VERSION="${{ steps.rel.outputs.version }}"
-          elif [ "${{ inputs.enable_main_dev_tag }}" = "true" ] && [ "$GITHUB_REF" = "refs/heads/${{ inputs.main_branch }}" ]; then
+          elif [[ "${{ inputs.enable_main_dev_tag }}" == "true" && "$GITHUB_REF" == "refs/heads/${{ inputs.main_branch }}" ]]; then
             NEW_VERSION="main-${GITHUB_SHA:0:7}"
-          elif [ "${{ inputs.enable_auto_version }}" = "true" ]; then
-            VERSION="${LATEST_TAG}"
-            if [ -z "$VERSION" ]; then
+          elif [[ "${{ inputs.enable_auto_version }}" == "true" ]]; then
+            if [[ -z "$LATEST_TAG" ]]; then
               NEW_VERSION="1.0.0"
             else
-              NEW_VERSION=$(echo "$VERSION" | awk -F. -v OFS=. '{$NF++;print}')
+              NEW_VERSION=$(echo "$LATEST_TAG" | awk -F. -v OFS=. '{$NF++;print}')
             fi
           else
             NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
           fi
-          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
-          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "NEW_VERSION=${NEW_VERSION}" >> "$GITHUB_ENV"
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Docker meta
         id: meta
@@ -795,20 +800,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Prepare version
-        id: rel
-        run: |
-          NEW_VERSION="${{ needs.build.outputs.new-version }}"
-          echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
-          if [[ "$GITHUB_REF" == refs/tags/* ]] && [ "${{ inputs.release_on_tag }}" = "true" ]; then
-            VERSION="$NEW_VERSION"
-            MAJOR_MINOR="${VERSION%.*}"
-            MAJOR="${VERSION%%.*}"
-            if [[ "$MAJOR" == "0" ]]; then IS_PRE_ONE=true; else IS_PRE_ONE=false; fi
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
-            echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
-            echo "is_pre_one=$IS_PRE_ONE" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> "$GITHUB_ENV"
 
       - name: Docker meta
         id: meta
@@ -818,9 +810,9 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=${{ steps.rel.outputs.version }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.rel.outputs.major_minor }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.rel.outputs.major }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') && steps.rel.outputs.is_pre_one == 'false' }}
+            type=raw,value=${{ needs.build.outputs.version }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ needs.build.outputs.major_minor }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ needs.build.outputs.major }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') && needs.build.outputs.is_pre_one == 'false' }}
             type=raw,value=latest,enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=main,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
             type=sha,prefix=main-,format=short,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
