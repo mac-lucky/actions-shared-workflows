@@ -396,11 +396,20 @@ jobs:
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}
 
+      - name: Generate image SBOM (Syft)
+        if: ${{ inputs.enable_security_scan }}
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: '${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}'
+          format: spdx-json
+          output-file: image-sbom.spdx.json
+          upload-artifact: false
+
       - name: Container security scan
         if: ${{ inputs.enable_security_scan }}
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
-          image: '${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}'
+          sbom: image-sbom.spdx.json
           output-format: "table"
           output-file: "grype-results.txt"
           fail-build: "false"

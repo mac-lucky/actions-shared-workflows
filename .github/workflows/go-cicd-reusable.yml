@@ -350,11 +350,20 @@ jobs:
             exit 1
           fi
 
+      - name: Generate SBOM (Syft)
+        if: matrix.tool == 'grype' && inputs.enable_security_scan
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: ${{ inputs.go_module_path }}
+          format: spdx-json
+          output-file: grype-sbom.spdx.json
+          upload-artifact: false
+
       - name: Run Grype vulnerability scanner
         if: matrix.tool == 'grype' && inputs.enable_security_scan
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
         with:
-          path: ${{ inputs.go_module_path }}
+          sbom: grype-sbom.spdx.json
           output-format: "table"
           output-file: "grype-results.txt"
           fail-build: "false"
@@ -860,7 +869,7 @@ jobs:
 
       - name: Generate SBOM
         if: ${{ inputs.enable_sbom }}
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           image: ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
           format: spdx-json
