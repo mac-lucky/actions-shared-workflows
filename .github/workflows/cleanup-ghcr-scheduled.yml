@@ -30,7 +30,6 @@ jobs:
           - kubernetes-ping-exporter
           - nodered-mcp-server
           - portfolio
-          - pushward-admin
           - pushward-bambulab
           - pushward-github
           - pushward-grafana
