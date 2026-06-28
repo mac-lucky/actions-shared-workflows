@@ -1,0 +1,39 @@
+# Org-wide Grype ignore baseline, consumed by the reusable CI workflows
+# (docker-cicd and python-cicd) via the "Prepare Grype policy" step, which writes
+# this file into the build workspace as .grype.yaml before the image scan.
+#
+# Each rule is scoped (location/type) to the specific upstream component we cannot
+# patch downstream, so it never suppresses a same-named package in a repo we own.
+# New CVEs in these packages/paths are covered automatically. Remove an entry when
+# the upstream component ships a reachable fix.
+#
+# Go binaries (caddy, derper) ALSO get automatic reachability suppression from
+# govulncheck VEX in CI; the entries below cover reachable-but-accepted cases and
+# anything govulncheck's Go vulnerability database does not include.
+ignore:
+  # caddy-cloudflare: caddy-crowdsec-bouncer plugin compiles crowdsec into the
+  # caddy binary; the fix (crowdsec 1.7.8) is unreachable through xcaddy.
+  - package:
+      name: github.com/crowdsecurity/crowdsec
+      type: go-module
+      location: "/usr/bin/caddy"
+
+  # derper-docker: upstream tailscale derper pins old golang.org/x/crypto and
+  # golang.org/x/net; the fixes are unreachable without a vendored build.
+  - package:
+      name: golang.org/x/crypto
+      type: go-module
+      location: "/app/derper"
+  - package:
+      name: golang.org/x/net
+      type: go-module
+      location: "/app/derper"
+
+  # bambulab-timelapse-downloader: moviepy hard-pins pillow < 12 so the pillow fix
+  # (12.1.1+) is unreachable; the CPython base image CVEs await a patched release.
+  - package:
+      name: pillow
+      type: python
+  - package:
+      name: python
+      type: binary

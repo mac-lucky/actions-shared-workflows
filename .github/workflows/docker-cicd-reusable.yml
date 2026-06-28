@@ -97,6 +97,11 @@ on:
         required: false
         type: boolean
         default: true
+      govulncheck_binary:
+        description: 'Path to an upstream Go binary inside the image to reachability-scan with govulncheck (e.g. /usr/bin/caddy); empty disables it'
+        required: false
+        type: string
+        default: ''
 
       # Deployment
       push_to_dockerhub:
@@ -329,6 +334,48 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
 
+      # Build the effective Grype config: the org-wide ignore baseline, plus (for Go
+      # binaries) automatic reachability suppression from govulncheck VEX. Fail-safe -
+      # any error here leaves a valid empty config so the scan still runs.
+      - name: Prepare Grype policy
+        if: ${{ inputs.enable_security_scan }}
+        shell: bash
+        env:
+          GOVULN_BINARY: ${{ inputs.govulncheck_binary }}
+          SCAN_IMAGE: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
+        run: |
+          set +e
+          POLICY_URL="https://raw.githubusercontent.com/mac-lucky/actions-shared-workflows/master/security/grype-base-policy.yaml"
+          if curl -sSfL "$POLICY_URL" -o ./.grype.yaml && [ -s ./.grype.yaml ]; then
+            echo "Loaded org Grype baseline policy"
+          else
+            printf 'ignore: []\n' > ./.grype.yaml
+            echo "WARN: org policy unavailable; starting from an empty ignore set"
+          fi
+          if [ -n "${GOVULN_BINARY}" ]; then
+            cid="$(docker create "${SCAN_IMAGE}" 2>/dev/null)"
+            if [ -n "$cid" ] && docker cp "${cid}:${GOVULN_BINARY}" /tmp/govuln-bin 2>/dev/null; then
+              go install golang.org/x/vuln/cmd/govulncheck@latest 2>/dev/null
+              GVC="$(go env GOPATH)/bin/govulncheck"
+              if [ -x "$GVC" ] && "$GVC" -mode binary -format openvex /tmp/govuln-bin > ./govulncheck.vex.json 2>/dev/null && [ -s ./govulncheck.vex.json ]; then
+                printf 'vex-documents:\n  - ./govulncheck.vex.json\n' >> ./.grype.yaml
+                echo "Added govulncheck reachability VEX for ${GOVULN_BINARY}"
+              else
+                echo "WARN: govulncheck produced no VEX; skipping reachability layer"
+              fi
+            else
+              echo "WARN: could not extract ${GOVULN_BINARY} from image; skipping reachability layer"
+            fi
+            [ -n "$cid" ] && docker rm "$cid" >/dev/null 2>&1
+          fi
+          if ! python3 -c "import yaml; yaml.safe_load(open('./.grype.yaml'))" 2>/dev/null; then
+            echo "WARN: generated .grype.yaml is invalid; resetting to empty ignore set"
+            printf 'ignore: []\n' > ./.grype.yaml
+          fi
+          echo "----- effective .grype.yaml -----"
+          cat ./.grype.yaml
+          exit 0
+
       # Scan the built image. With fail-build:true this fails the job on a gating
       # finding, so the push step below never runs and merge (needs: build) is skipped.
       - name: Container security scan (Grype)
@@ -342,7 +389,7 @@ jobs:
           fail-build: ${{ inputs.scan_fail_build }}
 
       - name: Upload scan SARIF
-        if: ${{ inputs.enable_security_scan && always() }}
+        if: ${{ inputs.enable_security_scan && always() && steps.scan.outputs.sarif != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}
