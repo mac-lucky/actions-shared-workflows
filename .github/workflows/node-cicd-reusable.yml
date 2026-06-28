@@ -80,6 +80,21 @@ on:
         required: false
         type: boolean
         default: true
+      scan_severity_cutoff:
+        description: 'Grype severity at/above which findings count (negligible|low|medium|high|critical)'
+        required: false
+        type: string
+        default: 'high'
+      scan_only_fixed:
+        description: 'Only gate on vulnerabilities that have a fix available'
+        required: false
+        type: boolean
+        default: true
+      scan_fail_build:
+        description: 'Fail the build (block the push) when the image scan finds gating vulnerabilities'
+        required: false
+        type: boolean
+        default: true
       enable_code_analysis:
         description: 'Enable code analysis (svelte-check, build verification, grype)'
         required: false
@@ -199,8 +214,6 @@ jobs:
             name: Svelte Check
           - tool: build-check
             name: Build Check
-          - tool: grype
-            name: Grype Security Scan
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -261,37 +274,6 @@ jobs:
             echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             exit 1
-          fi
-
-      - name: Generate SBOM (Syft)
-        if: matrix.tool == 'grype' && inputs.enable_security_scan
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: ${{ inputs.build_context }}
-          format: spdx-json
-          output-file: grype-sbom.spdx.json
-          upload-artifact: false
-
-      - name: Run Grype vulnerability scanner
-        if: matrix.tool == 'grype' && inputs.enable_security_scan
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
-        with:
-          sbom: grype-sbom.spdx.json
-          output-format: "table"
-          output-file: "grype-results.txt"
-          fail-build: "false"
-
-      - name: Grype job summary
-        if: matrix.tool == 'grype' && inputs.enable_security_scan && always()
-        run: |
-          if [ ! -s grype-results.txt ]; then
-            echo "## :white_check_mark: Grype Security Scan" >> $GITHUB_STEP_SUMMARY
-            echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "## :shield: Grype Security Scan" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat grype-results.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
   # Job 4: Build Container Image
@@ -370,6 +352,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -455,6 +438,48 @@ jobs:
             type=raw,value=${{ env.NEW_VERSION }}
             type=raw,value=latest
 
+      # Build this single arch into the local daemon so it can be scanned before push
+      # (single-platform builds support load:true; multi-platform ones do not). Warms
+      # the gha cache (mode=max) for the push build below.
+      - name: Build image for scan
+        id: build-local
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NODE_VERSION=${{ needs.setup.outputs.node-version }}
+            VERSION=${{ env.NEW_VERSION }}
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          load: true
+          push: false
+          tags: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
+          cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
+
+      # Scan the built image; with fail-build:true a gating finding fails the job so the
+      # push step never runs and merge (needs: build) is skipped - nothing is published.
+      - name: Container security scan (Grype)
+        id: scan
+        if: ${{ inputs.enable_security_scan }}
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
+          severity-cutoff: ${{ inputs.scan_severity_cutoff }}
+          only-fixed: ${{ inputs.scan_only_fixed }}
+          fail-build: ${{ inputs.scan_fail_build }}
+
+      - name: Upload scan SARIF
+        if: ${{ inputs.enable_security_scan && always() }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: grype-${{ env.PLATFORM_PAIR }}
+
+      # Cache hit from the scan build above; only exports/pushes layers by digest.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -470,7 +495,6 @@ jobs:
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE_GHCR }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
 
       - name: Export digest
         run: |

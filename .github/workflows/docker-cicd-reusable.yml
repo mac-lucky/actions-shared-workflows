@@ -82,6 +82,21 @@ on:
         required: false
         type: boolean
         default: true
+      scan_severity_cutoff:
+        description: 'Grype severity at/above which findings count (negligible|low|medium|high|critical)'
+        required: false
+        type: string
+        default: 'high'
+      scan_only_fixed:
+        description: 'Only gate on vulnerabilities that have a fix available'
+        required: false
+        type: boolean
+        default: true
+      scan_fail_build:
+        description: 'Fail the build (block the push) when the image scan finds gating vulnerabilities'
+        required: false
+        type: boolean
+        default: true
 
       # Deployment
       push_to_dockerhub:
@@ -228,6 +243,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -295,6 +311,44 @@ jobs:
             type=raw,value=${{ env.VERSION }}
             type=raw,value=latest
 
+      # Build this single arch into the local daemon so it can be scanned before
+      # anything is pushed. A single-platform build supports load:true (a multi-platform
+      # one does not). This also warms the gha cache (mode=max) for the push build below.
+      - name: Build image for scan
+        id: build-local
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ env.BUILD_ARGS }}
+          load: true
+          push: false
+          tags: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
+          cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
+
+      # Scan the built image. With fail-build:true this fails the job on a gating
+      # finding, so the push step below never runs and merge (needs: build) is skipped.
+      - name: Container security scan (Grype)
+        id: scan
+        if: ${{ inputs.enable_security_scan }}
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
+          severity-cutoff: ${{ inputs.scan_severity_cutoff }}
+          only-fixed: ${{ inputs.scan_only_fixed }}
+          fail-build: ${{ inputs.scan_fail_build }}
+
+      - name: Upload scan SARIF
+        if: ${{ inputs.enable_security_scan && always() }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: grype-${{ env.PLATFORM_PAIR }}
+
+      # Cache hit from the scan build above; this only exports/pushes layers by digest.
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -306,7 +360,6 @@ jobs:
           build-args: ${{ env.BUILD_ARGS }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE_GHCR }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
 
       - name: Export digest
         run: |
@@ -405,28 +458,15 @@ jobs:
           output-file: image-sbom.spdx.json
           upload-artifact: false
 
-      - name: Container security scan
+      # The image is vuln-scanned per-arch in the build job before push (see build job);
+      # here we only preserve the final multi-arch SBOM as a supply-chain artifact.
+      - name: Upload SBOM artifact
         if: ${{ inputs.enable_security_scan }}
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        uses: actions/upload-artifact@v4
         with:
-          sbom: image-sbom.spdx.json
-          output-format: "table"
-          output-file: "grype-results.txt"
-          fail-build: "false"
-          only-fixed: "true"
-
-      - name: Grype job summary
-        if: ${{ inputs.enable_security_scan && always() }}
-        run: |
-          if [ ! -s grype-results.txt ]; then
-            echo "## :white_check_mark: Grype Container Security Scan" >> $GITHUB_STEP_SUMMARY
-            echo "No vulnerabilities found." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "## :shield: Grype Container Security Scan" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat grype-results.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
+          name: sbom
+          path: image-sbom.spdx.json
+          retention-days: 7
 
   # Job 4: Post-deployment verification
   post-deploy-verify:
