@@ -473,6 +473,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -610,6 +611,7 @@ jobs:
           fail-build: ${{ inputs.scan_fail_build }}
 
       - name: Upload scan SARIF
+        continue-on-error: true
         if: ${{ inputs.enable_security_scan && always() && steps.scan.outputs.sarif != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
@@ -657,6 +659,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
