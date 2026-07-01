@@ -37,3 +37,16 @@ ignore:
   - package:
       name: python
       type: binary
+
+  # claude-code-docker: kustomize is built from source with the current Go
+  # toolchain, but kubectl (release binary) and helm (pins these deps in its own
+  # go.mod) carry vendored transitive CVEs we cannot patch downstream until
+  # upstream bumps them.
+  - package:
+      name: golang.org/x/net
+      type: go-module
+      location: "/usr/local/bin/kubectl"
+  - package:
+      name: github.com/containerd/containerd
+      type: go-module
+      location: "/usr/local/bin/helm"
