@@ -17,9 +17,10 @@ on:
         required: true
         type: string
       dockerhub_image:
-        description: 'Docker Hub image name (e.g., maclucky/app-name)'
-        required: true
+        description: 'Docker Hub image name (e.g., maclucky/app-name); only needed with push_to_dockerhub'
+        required: false
         type: string
+        default: ''
       ghcr_image:
         description: 'GHCR image name (e.g., ghcr.io/mac-lucky/app-name)'
         required: true
