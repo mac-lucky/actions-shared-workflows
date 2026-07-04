@@ -154,7 +154,7 @@ jobs:
       workflow-changed: ${{ steps.changes.outputs.workflow-changed }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -174,7 +174,7 @@ jobs:
       python-version: ${{ steps.python-version.outputs.version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Extract Python version
         id: python-version
@@ -220,19 +220,19 @@ jobs:
             name: Bandit Security
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Install uv
         if: ${{ inputs.use_uv && (matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format' || matrix.tool == 'bandit') }}
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v8
         with:
           version: "latest"
 
       - name: Set up Python
         if: matrix.tool != 'grype'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.setup.outputs.python-version }}
 
@@ -315,14 +315,14 @@ jobs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build container
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
@@ -342,7 +342,7 @@ jobs:
 
       - name: Upload container artifact
         if: ${{ inputs.enable_kubernetes_tests || inputs.enable_container_tests }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: container-image
           path: /tmp/${{ inputs.app_name }}.tar.gz
@@ -356,10 +356,10 @@ jobs:
     if: ${{ inputs.enable_container_tests && needs.build-container.result == 'success' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Download container artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: container-image
           path: /tmp
@@ -379,10 +379,10 @@ jobs:
     if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' && needs.build-container.result == 'success' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Download container artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: container-image
           path: /tmp
@@ -491,21 +491,21 @@ jobs:
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
 
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: docker.io
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_PASSWORD }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -548,7 +548,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
           tags: |
@@ -560,7 +560,7 @@ jobs:
       # the gha cache (mode=max) for the push build below.
       - name: Build image for scan
         id: build-local
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
@@ -613,7 +613,7 @@ jobs:
       - name: Upload scan SARIF
         continue-on-error: true
         if: ${{ inputs.enable_security_scan && always() && steps.scan.outputs.sarif != '' }}
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}
           category: grype-${{ env.PLATFORM_PAIR }}
@@ -621,7 +621,7 @@ jobs:
       # Cache hit from the scan build above; only exports/pushes layers by digest.
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
@@ -642,7 +642,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-${{ env.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
@@ -662,14 +662,14 @@ jobs:
       actions: read
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Prepare version
         run: |
@@ -677,7 +677,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
           tags: |
@@ -686,14 +686,14 @@ jobs:
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: docker.io
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_PASSWORD }}
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -728,7 +728,7 @@ jobs:
 
       - name: Upload SBOM artifact
         if: ${{ inputs.enable_sbom }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: sbom.spdx.json
