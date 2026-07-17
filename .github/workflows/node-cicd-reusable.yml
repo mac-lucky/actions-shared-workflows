@@ -112,6 +112,11 @@ on:
         required: false
         type: boolean
         default: true
+      push_on_tag:
+        description: 'Push images on git tag pushes (vX.Y.Z); the image is tagged with the version'
+        required: false
+        type: boolean
+        default: false
       push_to_dockerhub:
         description: 'Push images to Docker Hub (in addition to GHCR)'
         required: false
@@ -348,7 +353,7 @@ jobs:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     needs: [check-changes, setup, build-container, container-test]
-    if: ${{ ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped')) }}
+    if: ${{ ((((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true') || (github.event_name == 'push' && inputs.push_on_tag && startsWith(github.ref, 'refs/tags/'))) && (always() && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped')) }}
     permissions:
       contents: read
       packages: write
@@ -419,7 +424,10 @@ jobs:
       - name: Set version
         id: set_version
         run: |
-          if [ "${{ inputs.enable_auto_version }}" = "true" ]; then
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # Tag-driven release: the version is the tag itself, minus a leading v.
+            NEW_VERSION="${GITHUB_REF_NAME#v}"
+          elif [ "${{ inputs.enable_auto_version }}" = "true" ]; then
             VERSION=${{ env.LATEST_TAG }}
             if [ -z "$VERSION" ]; then
               NEW_VERSION="0.1.0"
@@ -521,7 +529,7 @@ jobs:
     name: Create Multi-arch Manifest
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, build]
-    if: ${{ always() && needs.build.result == 'success' && ((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true' }}
+    if: ${{ always() && needs.build.result == 'success' && ((((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true') || (github.event_name == 'push' && inputs.push_on_tag && startsWith(github.ref, 'refs/tags/'))) }}
     permissions:
       contents: read
       packages: write
