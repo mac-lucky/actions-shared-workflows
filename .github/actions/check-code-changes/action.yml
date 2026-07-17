@@ -46,6 +46,7 @@ runs:
         if [ "${{ inputs.event_name }}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
           echo "Tag push - forcing build"
           echo "code=true" >> $GITHUB_OUTPUT
+          echo "workflow=false" >> $GITHUB_OUTPUT
           exit 0
         fi
 

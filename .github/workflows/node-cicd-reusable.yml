@@ -404,7 +404,8 @@ jobs:
           password: ${{ github.token }}
 
       - name: Get latest version tag
-        if: ${{ inputs.enable_auto_version }}
+        # On a tag push the version comes from the ref, so the GHCR lookup is dead work.
+        if: ${{ inputs.enable_auto_version && github.ref_type != 'tag' }}
         id: get_latest_version
         run: |
           # Extract image name from GHCR URL (e.g., ghcr.io/mac-lucky/app-name -> app-name)
@@ -438,6 +439,13 @@ jobs:
             # Use git tag or default version
             NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.1.0")
           fi
+          # NEW_VERSION is interpolated into later shell steps (the merge job), and on
+          # the tag path it derives from a ref name any writer can craft, so reject
+          # anything that is not a bare semver before it can reach a shell.
+          if ! printf '%s' "$NEW_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "Refusing to build: version '$NEW_VERSION' is not a bare semver (ref: ${GITHUB_REF_NAME})."
+            exit 1
+          fi
           echo "NEW_VERSION=${NEW_VERSION}" >> $GITHUB_ENV
           echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
 
@@ -448,7 +456,7 @@ jobs:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
           tags: |
             type=raw,value=${{ env.NEW_VERSION }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       # Build this single arch into the local daemon so it can be scanned before push
       # (single-platform builds support load:true; multi-platform ones do not). Warms
@@ -485,7 +493,7 @@ jobs:
           fail-build: ${{ inputs.scan_fail_build }}
 
       - name: Upload scan SARIF
-        # Reporting only — a SARIF upload failure must never block publishing the image.
+        # Reporting only - a SARIF upload failure must never block publishing the image.
         continue-on-error: true
         if: ${{ inputs.enable_security_scan && always() && steps.scan.outputs.sarif != '' }}
         uses: github/codeql-action/upload-sarif@v4
@@ -557,7 +565,7 @@ jobs:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
           tags: |
             type=raw,value=${{ env.NEW_VERSION }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
