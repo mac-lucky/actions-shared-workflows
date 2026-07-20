@@ -200,6 +200,7 @@ jobs:
               if [ "$UPSTREAM_VERSION" = "null" ] || [ -z "$UPSTREAM_VERSION" ]; then
                 echo "⚠️ Failed to get upstream version - API may be rate limited"
                 echo "⏭️ Skipping build due to version fetch failure"
+                UPSTREAM_VERSION=""
                 BUILD_NEEDED="false"
               elif [ -n "${{ inputs.version_strip_prefix }}" ]; then
                 UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
