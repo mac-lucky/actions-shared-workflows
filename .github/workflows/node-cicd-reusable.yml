@@ -149,6 +149,15 @@ on:
         required: false
         type: boolean
         default: false
+      build_fetch_depth:
+        description: >-
+          Checkout depth for the container build and publish jobs. Defaults to a
+          shallow clone; set to 0 when the Docker build reads git history (e.g. to
+          derive per-file commit dates). Full history is slower to fetch and sends
+          .git into the build context, so only opt in where it is needed.
+        required: false
+        type: number
+        default: 1
 
 env:
   REGISTRY_IMAGE_DOCKERHUB: ${{ inputs.dockerhub_image }}
@@ -292,6 +301,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: ${{ inputs.build_fetch_depth }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -380,6 +391,8 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: ${{ inputs.build_fetch_depth }}
 
       - name: Set up QEMU
         if: ${{ !inputs.skip_qemu_setup }}
