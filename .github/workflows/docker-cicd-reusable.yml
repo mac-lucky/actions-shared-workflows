@@ -355,6 +355,18 @@ jobs:
             printf 'ignore: []\n' > ./.grype.yaml
             echo "WARN: org policy unavailable; starting from an empty ignore set"
           fi
+          # A repo may append its own ignore entries. This exists so exemptions
+          # for one image's vendored binaries stay in that repo instead of being
+          # added to the org baseline, where a path glob would silently un-gate
+          # the same path in every other caller.
+          if [ -s ./.grype-ignore.yaml ]; then
+            cat ./.grype-ignore.yaml >> ./.grype.yaml
+            # Concatenating YAML is indentation-sensitive: the repo file's list
+            # items must sit at the same indent as the baseline's. A bad merge
+            # is caught by grype itself, which exits non-zero on a config it
+            # cannot parse rather than scanning with an empty ignore set.
+            echo "Appended repo-local .grype-ignore.yaml"
+          fi
           if [ -n "${GOVULN_BINARY}" ]; then
             cid="$(docker create "${SCAN_IMAGE}" 2>/dev/null)"
             if [ -n "$cid" ] && docker cp "${cid}:${GOVULN_BINARY}" /tmp/govuln-bin 2>/dev/null; then

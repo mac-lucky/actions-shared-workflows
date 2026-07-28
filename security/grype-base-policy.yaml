@@ -50,25 +50,3 @@ ignore:
       name: github.com/containerd/containerd
       type: go-module
       location: "/usr/local/bin/helm"
-
-  # infra-ci: the image is a toolbox of upstream release binaries (tofu, sops,
-  # kubectl, helm, kustomize, kubeconform, talosctl, op) plus Alpine's own Go
-  # builds (age, yq). The Go stdlib and modules compiled into them are whatever
-  # each project shipped, so no downstream change fixes them; a fix lands when
-  # the project cuts a release, which the weekly rebuild picks up. Scoped to the
-  # binary paths so Go code we build ourselves is still gated.
-  - package:
-      type: go-module
-      location: "/usr/local/bin/**"
-  - package:
-      type: go-module
-      location: "/usr/bin/age*"
-  - package:
-      type: go-module
-      location: "/usr/bin/yq"
-
-  # infra-ci: npm bundled inside the node base image. Not a dependency we
-  # declare, and it updates only when the node image does.
-  - package:
-      type: npm
-      location: "/usr/local/lib/node_modules/npm/**"
