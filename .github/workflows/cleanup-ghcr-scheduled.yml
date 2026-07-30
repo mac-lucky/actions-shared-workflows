@@ -38,7 +38,6 @@ jobs:
           - pushward-server
           - pushward-unraid
           - pushward-web
-          - tailscale-check
           - tcp-endpoint-check-exporter
           - ux-ui-site
           - webhook-capture
