@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "prConcurrentLimit": 2,
+  "prHourlyLimit": 1,
+  "customManagers": [
+    {
+      "description": "gocryptfs-docker builds a tagged upstream release whose go.mod pins an old golang.org/x/crypto. The Dockerfile raises that floor with go get; this keeps the floor current.",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": ["ARG XCRYPTO_VERSION=(?<currentValue>\\S+)"],
+      "depNameTemplate": "golang.org/x/crypto",
+      "datasourceTemplate": "go"
+    }
+  ]
+}

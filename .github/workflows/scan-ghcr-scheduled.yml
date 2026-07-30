@@ -1,0 +1,101 @@
+name: Scheduled GHCR Scan
+
+# Scans images that are already published. The build-time scan in
+# docker-cicd-reusable.yml only runs when something triggers a build, and with
+# scan_fail_build:true a finding *fails* that build - so the vulnerable image
+# stays published while CI goes red and nothing reports on the artifact people
+# actually pull. A rebuild-on-upstream image whose upstream goes quiet can drift
+# for a year with no signal at all; gocryptfs-docker did exactly that.
+#
+# The image list is discovered, not hardcoded. The matrix in
+# cleanup-ghcr-scheduled.yml has already drifted in both directions, and a
+# second copy of it would drift the same way.
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 4am Warsaw (CEST) / 3am (CET). After the 01:00 cleanup, before Renovate at 03:00.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: Discover images
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+    steps:
+      - name: List container packages
+        id: list
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          images=$(gh api "/user/packages?package_type=container&per_page=100" \
+            -q '[.[].name] | sort')
+          count=$(jq length <<< "$images")
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No container packages returned - check GHCR_READ_TOKEN scope"
+            exit 1
+          fi
+          echo "Discovered $count images"
+          jq -r '.[]' <<< "$images"
+          echo "images=$(jq -c . <<< "$images")" >> "$GITHUB_OUTPUT"
+
+  scan:
+    name: Scan ${{ matrix.image }}
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        image: ${{ fromJson(needs.discover.outputs.images) }}
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_READ_TOKEN }}
+
+      # Every image has :latest today, but an image that only ever ships version
+      # tags should be skipped rather than fail the leg.
+      - name: Check for a latest tag
+        id: tag
+        run: |
+          if docker manifest inspect "ghcr.io/mac-lucky/${{ matrix.image }}:latest" >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::ghcr.io/mac-lucky/${{ matrix.image }} has no :latest tag - skipping"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Same action SHA and same gate settings as the build-time scan, so the
+      # two agree on what counts as a finding. fail-build is the one difference:
+      # this job reports, and a job that goes red every day gets ignored.
+      - name: Container security scan (Grype)
+        id: scan
+        if: steps.tag.outputs.present == 'true'
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        with:
+          image: ghcr.io/mac-lucky/${{ matrix.image }}:latest
+          severity-cutoff: high
+          only-fixed: true
+          fail-build: false
+          output-format: sarif
+
+      # Distinct category per image: uploads sharing one category overwrite each
+      # other, and the build workflows already upload under the default.
+      - name: Upload scan SARIF
+        if: steps.tag.outputs.present == 'true'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: published-${{ matrix.image }}
