@@ -67,16 +67,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.RENOVATE_TOKEN }}
 
-      # Every image has :latest today, but an image that only ever ships version
-      # tags should be skipped rather than fail the leg.
-      - name: Check for a latest tag
+      # Two things here. An image that only ever ships version tags is skipped
+      # rather than failing the leg. And the arch-specific addon images have no
+      # linux/amd64 variant at all, so grype on an amd64 runner cannot resolve
+      # them - pick a platform the image actually ships and pull that. Docker
+      # will hold a foreign-arch image happily; nothing here has to run it.
+      - name: Resolve tag and platform
         id: tag
         run: |
-          if docker manifest inspect "ghcr.io/mac-lucky/${{ matrix.image }}:latest" >/dev/null 2>&1; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::ghcr.io/mac-lucky/${{ matrix.image }} has no :latest tag - skipping"
+          ref="ghcr.io/mac-lucky/${{ matrix.image }}:latest"
+          if ! docker manifest inspect "$ref" > /tmp/manifest.json 2>/dev/null; then
+            echo "::notice::$ref has no :latest tag - skipping"
             echo "present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Prefer amd64; otherwise the first real platform. The unknown/unknown
+          # entries are buildx attestations, not images.
+          platform=$(jq -r '
+            [ (.manifests // [])[]
+              | select(.platform.os and .platform.os != "unknown")
+              | "\(.platform.os)/\(.platform.architecture)"
+                + (if .platform.variant then "/"+.platform.variant else "" end) ]
+            | (map(select(. == "linux/amd64")) + .) | first // ""' /tmp/manifest.json)
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          if [ -n "$platform" ]; then
+            echo "Pulling $ref as $platform"
+            docker pull --platform "$platform" "$ref"
+          else
+            echo "Pulling $ref (single-arch)"
+            docker pull "$ref"
           fi
 
       # Same action SHA and same gate settings as the build-time scan, so the
