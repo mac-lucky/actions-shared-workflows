@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 1 * * *'  # 3am Warsaw (CEST) / 2am (CET)
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log deletions without performing them
+        type: boolean
+        default: false
 
 permissions:
   packages: write
@@ -13,10 +18,14 @@ jobs:
   cleanup:
     name: Cleanup ${{ matrix.image }}
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # No continue-on-error: fail-fast:false already stops one bad image from
+    # cancelling the rest, and continue-on-error additionally reports the job as
+    # successful whatever happens in it.
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Every job shares one token, and GitHub's secondary rate limit prices a
+      # DELETE at 5 points against a 900/min budget.
+      max-parallel: 2
       matrix:
         image:
           - bambulab-timelapse-downloader
@@ -50,3 +59,5 @@ jobs:
         with:
           registry_image: ghcr.io/mac-lucky/${{ matrix.image }}
           github_token: ${{ secrets.GHCR_CLEANUP_TOKEN }}
+          # inputs is null on a schedule run, so compare instead of passing it through
+          dry_run: ${{ inputs.dry_run == true }}
