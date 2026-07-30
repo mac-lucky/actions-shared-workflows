@@ -150,6 +150,23 @@ on:
         required: false
         type: boolean
         default: true
+      # Analysis tools are pinned so an upstream release cannot turn a caller red
+      # without a commit. These findings gate the publish, so a surprise is costly.
+      staticcheck_version:
+        description: 'staticcheck version to install (e.g., v0.7.0 or latest)'
+        required: false
+        type: string
+        default: 'v0.7.0'
+      govulncheck_version:
+        description: 'govulncheck version to install. Pins the binary, not the vulnerability database - that is still fetched at run time, so new CVEs still fail the job.'
+        required: false
+        type: string
+        default: 'v1.6.0'
+      gosec_version:
+        description: 'gosec version to install (e.g., v2.28.0 or latest)'
+        required: false
+        type: string
+        default: 'v2.28.0'
       
       # Deployment
       enable_auto_version:
@@ -309,7 +326,7 @@ jobs:
         id: staticcheck
         working-directory: ${{ inputs.go_module_path }}
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install honnef.co/go/tools/cmd/staticcheck@${{ inputs.staticcheck_version }}
           if OUTPUT=$(staticcheck ./... 2>&1); then
             echo "## :white_check_mark: Staticcheck" >> $GITHUB_STEP_SUMMARY
             echo "No issues found." >> $GITHUB_STEP_SUMMARY
@@ -325,7 +342,7 @@ jobs:
         if: matrix.tool == 'govulncheck'
         working-directory: ${{ inputs.go_module_path }}
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@${{ inputs.govulncheck_version }}
           set +e
           OUTPUT=$(govulncheck ./... 2>&1)
           EXIT_CODE=$?
@@ -346,7 +363,7 @@ jobs:
         if: matrix.tool == 'gosec'
         working-directory: ${{ inputs.go_module_path }}
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          go install github.com/securego/gosec/v2/cmd/gosec@${{ inputs.gosec_version }}
           set +e
           OUTPUT=$(gosec -fmt text ./... 2>&1)
           EXIT_CODE=$?
