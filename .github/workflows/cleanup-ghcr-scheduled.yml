@@ -18,7 +18,9 @@ jobs:
   cleanup:
     name: Cleanup ${{ matrix.image }}
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # No continue-on-error: fail-fast:false already keeps one bad image from
+    # stopping the rest, while continue-on-error also hid the failure from the
+    # run conclusion - deletions were failing nightly behind a green check.
     strategy:
       fail-fast: false
       max-parallel: 4
