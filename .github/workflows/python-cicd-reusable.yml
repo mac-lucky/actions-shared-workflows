@@ -122,6 +122,21 @@ on:
         required: false
         type: boolean
         default: true
+      # Ruff gates the build, so its version decides what "clean" means. Ruff's
+      # default rule set is not fixed - 0.16 ships 413 rules where older releases
+      # shipped E4,E7,E9,F - and a caller with no [tool.ruff.lint] select inherits
+      # whatever the newest one enables. Unpinned, an upstream release would turn
+      # every caller red with no commit anywhere.
+      ruff_version:
+        description: 'Ruff version to lint and format-check with'
+        required: false
+        type: string
+        default: '0.16.1'
+      bandit_version:
+        description: 'Bandit version for the advisory security scan'
+        required: false
+        type: string
+        default: '1.9.4'
 
       # Deployment
       enable_auto_version:
@@ -250,13 +265,18 @@ jobs:
 
       - name: Install ruff
         if: matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format'
+        env:
+          TOOL_VERSION: ${{ inputs.ruff_version }}
         run: |
           if [ "${{ inputs.use_uv }}" = "true" ]; then
-            uv tool install ruff
+            uv tool install ruff=="$TOOL_VERSION"
           else
-            pip install ruff
+            pip install ruff=="$TOOL_VERSION"
           fi
 
+      # Two runs on purpose: concise reads better in the step summary, github
+      # emits the inline annotations. The concise run decides the exit status,
+      # so the || true below only ever swallows a duplicate failure.
       - name: Run ruff linter
         if: matrix.tool == 'ruff-lint'
         working-directory: ${{ inputs.build_context }}
@@ -265,13 +285,13 @@ jobs:
             echo "## :white_check_mark: Ruff Linter" >> $GITHUB_STEP_SUMMARY
             echo "No issues found." >> $GITHUB_STEP_SUMMARY
           else
-            echo "## :warning: Ruff Linter" >> $GITHUB_STEP_SUMMARY
+            echo "## :x: Ruff Linter" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            ruff check . --output-format=github || true
+            exit 1
           fi
-          # Also output in GitHub format for annotations
-          ruff check . --output-format=github || true
 
       - name: Run ruff formatter check
         if: matrix.tool == 'ruff-format'
@@ -281,23 +301,31 @@ jobs:
             echo "## :white_check_mark: Ruff Formatter" >> $GITHUB_STEP_SUMMARY
             echo "All files are properly formatted." >> $GITHUB_STEP_SUMMARY
           else
-            echo "## :warning: Ruff Formatter" >> $GITHUB_STEP_SUMMARY
+            echo "## :x: Ruff Formatter" >> $GITHUB_STEP_SUMMARY
             echo "The following files need formatting:" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
           fi
 
+      # Advisory on purpose, unlike the ruff legs above: bandit's default rule set
+      # flags every assert in a test suite (B101), so gating on it would block on
+      # pytest rather than on anything a caller can act on. Read the summary.
       - name: Install and run bandit
         if: matrix.tool == 'bandit'
         working-directory: ${{ inputs.build_context }}
+        env:
+          TOOL_VERSION: ${{ inputs.bandit_version }}
         run: |
           if [ "${{ inputs.use_uv }}" = "true" ]; then
-            uv tool install bandit
+            uv tool install bandit=="$TOOL_VERSION"
           else
-            pip install bandit
+            pip install bandit=="$TOOL_VERSION"
           fi
-          if OUTPUT=$(bandit -r . -f txt --exclude .venv,.git 2>&1); then
+          # Exclude paths need the ./ prefix: bandit matches them against the paths
+          # -r . produces, so a bare .venv never matches and scans the whole venv.
+          if OUTPUT=$(bandit -r . -f txt --exclude ./.venv,./.git 2>&1); then
             echo "## :white_check_mark: Bandit Security" >> $GITHUB_STEP_SUMMARY
             echo "No security issues found." >> $GITHUB_STEP_SUMMARY
           else
