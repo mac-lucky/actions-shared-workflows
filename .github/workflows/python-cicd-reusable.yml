@@ -226,7 +226,9 @@ jobs:
 
       - name: Install uv
         if: ${{ inputs.use_uv && (matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format' || matrix.tool == 'bandit') }}
-        uses: astral-sh/setup-uv@v8
+        # setup-uv stopped publishing floating major tags after v7, so this
+        # has to be an exact version.
+        uses: astral-sh/setup-uv@v9.0.0
         with:
           version: "latest"
 
