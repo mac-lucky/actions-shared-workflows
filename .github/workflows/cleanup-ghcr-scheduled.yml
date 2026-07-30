@@ -35,7 +35,6 @@ jobs:
           - derper
           - gocryptfs-docker
           - homeassistant-mcp
-          - homelab-doctor
           - kubernetes-ping-exporter
           - nodered-mcp-server
           - portfolio
