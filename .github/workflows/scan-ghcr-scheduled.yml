@@ -31,10 +31,12 @@ jobs:
     outputs:
       images: ${{ steps.list.outputs.images }}
     steps:
+      # RENOVATE_TOKEN is the shared fleet PAT; it carries read:packages as well.
+      # Named for its main consumer, not for this job.
       - name: List container packages
         id: list
         env:
-          GH_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+          GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
         run: |
           set -euo pipefail
           images=$(gh api "/user/packages?package_type=container&per_page=100" \
@@ -63,7 +65,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_READ_TOKEN }}
+          password: ${{ secrets.RENOVATE_TOKEN }}
 
       # Every image has :latest today, but an image that only ever ships version
       # tags should be skipped rather than fail the leg.
