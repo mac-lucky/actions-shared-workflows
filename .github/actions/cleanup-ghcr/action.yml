@@ -6,13 +6,15 @@ inputs:
     description: Full GHCR image URL (e.g., ghcr.io/owner/image-name)
     required: true
   github_token:
-    description: GitHub token with packages:write permission
+    description: >-
+      Classic PAT with the delete:packages scope. Fine-grained tokens and
+      github.token cannot delete package versions.
     required: true
   grace_hours:
     description: >-
-      Never delete untagged versions younger than this many hours. A multi-arch
-      publish pushes its per-arch children untagged and only tags the manifest
-      list afterwards, so a cleanup that lands mid-build would see live children
+      Skip untagged versions younger than this many hours. A multi-arch publish
+      pushes its per-arch children untagged and only tags the manifest list once
+      every arch is done, so a cleanup landing mid-build would see live children
       as orphans.
     required: false
     default: '6'
@@ -31,187 +33,4 @@ runs:
         REGISTRY_IMAGE: ${{ inputs.registry_image }}
         GRACE_HOURS: ${{ inputs.grace_hours }}
         DRY_RUN: ${{ inputs.dry_run }}
-      run: |
-        set -euo pipefail
-
-        IMAGE_NAME=$(echo "$REGISTRY_IMAGE" | sed 's|.*/||')
-        OWNER=$(echo "$REGISTRY_IMAGE" | sed 's|ghcr.io/||' | sed 's|/.*||')
-
-        # GRACE_HOURS reaches shell arithmetic below, so reject anything that is
-        # not a bare integer before it gets there.
-        if ! printf '%s' "$GRACE_HOURS" | grep -Eq '^[0-9]+$'; then
-          echo "::error::grace_hours must be a whole number of hours (got '$GRACE_HOURS')"
-          exit 1
-        fi
-        CUTOFF=$(( $(date -u +%s) - GRACE_HOURS * 3600 ))
-
-        if [ "$DRY_RUN" = "true" ]; then
-          echo "DRY RUN - nothing will be deleted"
-        fi
-        echo "Cleaning up untagged versions for $OWNER/$IMAGE_NAME (grace: ${GRACE_HOURS}h)..."
-
-        list_versions() {
-          curl -s -w "\n%{http_code}" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100"
-        }
-
-        # First listing: this is the one delete candidates come from. The tagged
-        # set is read from a second, later listing below, so protection is never
-        # staler than candidacy.
-        RESPONSE=$(list_versions)
-        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-        VERSIONS=$(echo "$RESPONSE" | sed '$d')
-
-        if [ "$HTTP_CODE" != "200" ]; then
-          echo "::warning::Failed to list versions (HTTP $HTTP_CODE), skipping cleanup"
-          exit 0
-        fi
-
-        if ! echo "$VERSIONS" | jq -e 'type == "array"' > /dev/null 2>&1; then
-          echo "::warning::Unexpected API response, skipping cleanup"
-          exit 0
-        fi
-
-        VERSION_COUNT=$(echo "$VERSIONS" | jq 'length')
-        if [ "$VERSION_COUNT" -eq 0 ]; then
-          echo "No versions found"
-          exit 0
-        fi
-
-        # Untagged and past the grace window. updated_at wins over created_at so a
-        # re-pushed digest counts as fresh; a version with neither timestamp gets an
-        # impossible date and is never a candidate.
-        CANDIDATES=$(echo "$VERSIONS" | jq -r --argjson cutoff "$CUTOFF" '
-          .[]
-          | select(.metadata.container.tags | length == 0)
-          | select(((.updated_at // .created_at // "9999-12-31T23:59:59Z") | fromdateiso8601) < $cutoff)
-          | [.id, .name] | @tsv')
-
-        HELD=$(echo "$VERSIONS" | jq --argjson cutoff "$CUTOFF" '
-          [ .[]
-            | select(.metadata.container.tags | length == 0)
-            | select(((.updated_at // .created_at // "9999-12-31T23:59:59Z") | fromdateiso8601) >= $cutoff)
-          ] | length')
-
-        if [ -z "$CANDIDATES" ]; then
-          echo "Nothing to delete ($HELD untagged version(s) within the ${GRACE_HOURS}h grace window)"
-          {
-            echo "### GHCR Cleanup: $IMAGE_NAME"
-            echo "Nothing to delete (held by grace window: **$HELD**)"
-          } >> $GITHUB_STEP_SUMMARY
-          exit 0
-        fi
-
-        # Second listing, taken after the candidates were picked: a tag created in
-        # the meantime still protects its children.
-        RESPONSE=$(list_versions)
-        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-        FRESH=$(echo "$RESPONSE" | sed '$d')
-
-        if [ "$HTTP_CODE" != "200" ] || ! echo "$FRESH" | jq -e 'type == "array"' > /dev/null 2>&1; then
-          echo "::warning::Failed to re-list versions (HTTP $HTTP_CODE), skipping cleanup"
-          exit 0
-        fi
-
-        TAGGED_DIGESTS=$(echo "$FRESH" | jq -r '.[] | select(.metadata.container.tags | length > 0) | .name')
-
-        if [ -z "$TAGGED_DIGESTS" ]; then
-          echo "No tagged versions found, skipping cleanup"
-          exit 0
-        fi
-
-        # Get GHCR registry token for manifest inspection
-        GHCR_TOKEN=$(curl -s -u "$OWNER:$GH_TOKEN" \
-          "https://ghcr.io/token?scope=repository:$OWNER/$IMAGE_NAME:pull" \
-          | jq -r '.token')
-
-        if [ -z "$GHCR_TOKEN" ] || [ "$GHCR_TOKEN" = "null" ]; then
-          echo "::error::Failed to obtain GHCR registry token - aborting to prevent accidental deletion"
-          exit 1
-        fi
-
-        # For each tagged manifest list, collect referenced child digests. A failed
-        # fetch means an incomplete protected set, which would delete live children,
-        # so abort instead of continuing - the next scheduled run retries.
-        PROTECTED_FILE=$(mktemp)
-        for digest in $TAGGED_DIGESTS; do
-          echo "$digest" >> "$PROTECTED_FILE"
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -H "Authorization: Bearer $GHCR_TOKEN" \
-            -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json" \
-            "https://ghcr.io/v2/$OWNER/$IMAGE_NAME/manifests/$digest")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          MANIFEST=$(echo "$RESPONSE" | sed '$d')
-
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "::error::Manifest fetch for $digest failed (HTTP $HTTP_CODE) - aborting, the protected set would be incomplete"
-            exit 1
-          fi
-
-          # A single-arch tagged manifest has no .manifests; that is not an error.
-          if ! echo "$MANIFEST" | jq -r '.manifests[]?.digest // empty' >> "$PROTECTED_FILE"; then
-            echo "::error::Could not parse manifest for $digest - aborting, the protected set would be incomplete"
-            exit 1
-          fi
-        done
-
-        sort -u -o "$PROTECTED_FILE" "$PROTECTED_FILE"
-        PROTECTED_COUNT=$(wc -l < "$PROTECTED_FILE" | tr -d ' ')
-
-        # Delete candidates not referenced by any tagged manifest list
-        DELETED=0
-        FAILED=0
-        FIRST_ERROR=""
-        while IFS=$'\t' read -r vid vname; do
-          if grep -qxF "$vname" "$PROTECTED_FILE"; then
-            continue
-          fi
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "would delete $vname ($vid)"
-            DELETED=$((DELETED + 1))
-            continue
-          fi
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions/$vid")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          if [ "$HTTP_CODE" = "204" ]; then
-            DELETED=$((DELETED + 1))
-          else
-            FAILED=$((FAILED + 1))
-            # Keep the first API message. Without it a wrong token just looks like
-            # a count, which is how this went unnoticed for months.
-            if [ -z "$FIRST_ERROR" ]; then
-              FIRST_ERROR="HTTP $HTTP_CODE: $(echo "$RESPONSE" | sed '$d' | jq -r '.message // "no message"' 2>/dev/null || echo 'unparseable response')"
-            fi
-          fi
-        done <<< "$CANDIDATES"
-
-        rm -f "$PROTECTED_FILE"
-
-        if [ "$DRY_RUN" = "true" ]; then
-          VERB="Would delete"
-        else
-          VERB="Deleted"
-        fi
-        SUMMARY="$VERB **$DELETED** untagged versions (protected: $PROTECTED_COUNT, held by grace window: $HELD, failed: $FAILED)"
-
-        {
-          echo "### GHCR Cleanup: $IMAGE_NAME"
-          echo "$SUMMARY"
-        } >> $GITHUB_STEP_SUMMARY
-
-        echo "$VERB $DELETED untagged versions (protected: $PROTECTED_COUNT, held: $HELD, failed: $FAILED)"
-
-        if [ "$FAILED" -gt 0 ]; then
-          if [ "$DELETED" -eq 0 ]; then
-            # Nothing got through at all: a token or permissions problem, not one
-            # stubborn version. Fail so it is visible instead of a green run.
-            echo "::error::All $FAILED deletions failed ($FIRST_ERROR) - check that GHCR_CLEANUP_TOKEN still has delete:packages"
-            exit 1
-          fi
-          echo "::warning::$FAILED deletions failed ($FIRST_ERROR)"
-        fi
+      run: bash "$GITHUB_ACTION_PATH/cleanup.sh"

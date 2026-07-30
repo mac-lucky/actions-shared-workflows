@@ -18,12 +18,14 @@ jobs:
   cleanup:
     name: Cleanup ${{ matrix.image }}
     runs-on: ubuntu-latest
-    # No continue-on-error: fail-fast:false already keeps one bad image from
-    # stopping the rest, while continue-on-error also hid the failure from the
-    # run conclusion - deletions were failing nightly behind a green check.
+    # No continue-on-error: fail-fast:false already stops one bad image from
+    # cancelling the rest, and continue-on-error additionally reports the job as
+    # successful whatever happens in it.
     strategy:
       fail-fast: false
-      max-parallel: 4
+      # Every job shares one token, and GitHub's secondary rate limit prices a
+      # DELETE at 5 points against a 900/min budget.
+      max-parallel: 2
       matrix:
         image:
           - bambulab-timelapse-downloader
