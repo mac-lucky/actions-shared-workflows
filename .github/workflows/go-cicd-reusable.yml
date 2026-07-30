@@ -153,17 +153,17 @@ on:
       # Analysis tools are pinned so an upstream release cannot turn a caller red
       # without a commit. These findings gate the publish, so a surprise is costly.
       staticcheck_version:
-        description: 'staticcheck version to install (e.g., v0.7.0 or latest)'
+        description: 'staticcheck version tag to install'
         required: false
         type: string
         default: 'v0.7.0'
       govulncheck_version:
-        description: 'govulncheck version to install. Pins the binary, not the vulnerability database - that is still fetched at run time, so new CVEs still fail the job.'
+        description: 'govulncheck version tag to install. Pins the binary, not the vulnerability database - that is still fetched at run time, so new CVEs still fail the job.'
         required: false
         type: string
         default: 'v1.6.0'
       gosec_version:
-        description: 'gosec version to install (e.g., v2.28.0 or latest)'
+        description: 'gosec version tag to install'
         required: false
         type: string
         default: 'v2.28.0'
@@ -321,12 +321,24 @@ jobs:
             exit 1
           fi
 
+      # Pinning the version is what makes caching the binary sound: the key can
+      # describe exactly what is in the cache. Building gosec from source takes
+      # minutes on a 2-core runner, and code-analysis gates the container build.
+      - name: Cache analysis tool
+        if: matrix.tool != 'go-vet'
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/${{ matrix.tool }}
+          key: gotool-${{ matrix.tool }}-${{ runner.os }}-${{ runner.arch }}-${{ needs.setup.outputs.go-version }}-${{ inputs.staticcheck_version }}-${{ inputs.govulncheck_version }}-${{ inputs.gosec_version }}
+
       - name: Run staticcheck
         if: matrix.tool == 'staticcheck'
         id: staticcheck
         working-directory: ${{ inputs.go_module_path }}
+        env:
+          TOOL_VERSION: ${{ inputs.staticcheck_version }}
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@${{ inputs.staticcheck_version }}
+          command -v staticcheck > /dev/null || go install honnef.co/go/tools/cmd/staticcheck@"$TOOL_VERSION"
           if OUTPUT=$(staticcheck ./... 2>&1); then
             echo "## :white_check_mark: Staticcheck" >> $GITHUB_STEP_SUMMARY
             echo "No issues found." >> $GITHUB_STEP_SUMMARY
@@ -341,8 +353,10 @@ jobs:
       - name: Run govulncheck
         if: matrix.tool == 'govulncheck'
         working-directory: ${{ inputs.go_module_path }}
+        env:
+          TOOL_VERSION: ${{ inputs.govulncheck_version }}
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@${{ inputs.govulncheck_version }}
+          command -v govulncheck > /dev/null || go install golang.org/x/vuln/cmd/govulncheck@"$TOOL_VERSION"
           set +e
           OUTPUT=$(govulncheck ./... 2>&1)
           EXIT_CODE=$?
@@ -362,8 +376,10 @@ jobs:
       - name: Run gosec
         if: matrix.tool == 'gosec'
         working-directory: ${{ inputs.go_module_path }}
+        env:
+          TOOL_VERSION: ${{ inputs.gosec_version }}
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@${{ inputs.gosec_version }}
+          command -v gosec > /dev/null || go install github.com/securego/gosec/v2/cmd/gosec@"$TOOL_VERSION"
           set +e
           OUTPUT=$(gosec -fmt text ./... 2>&1)
           EXIT_CODE=$?
@@ -640,6 +656,9 @@ jobs:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     needs: [check-changes, setup, build-container, container-test, kubernetes-test]
+    # always() switches off the implicit "skip when a dependency failed" rule, so
+    # build-container has to be checked explicitly or a failed image build still
+    # publishes.
     if: ${{ always() && needs.build-container.result == 'success' && (((github.event_name == 'push' && inputs.push_on_main) && github.ref == format('refs/heads/{0}', inputs.main_branch)) || (github.event_name == 'push' && inputs.release_on_tag && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
     permissions:
       contents: read
