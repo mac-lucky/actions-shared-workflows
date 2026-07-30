@@ -122,11 +122,9 @@ on:
         required: false
         type: boolean
         default: true
-      # Ruff gates the build, so its version decides what "clean" means. Ruff's
-      # default rule set is not fixed - 0.16 ships 413 rules where older releases
-      # shipped E4,E7,E9,F - and a caller with no [tool.ruff.lint] select inherits
-      # whatever the newest one enables. Unpinned, an upstream release would turn
-      # every caller red with no commit anywhere.
+      # Ruff gates the build, so its version decides what "clean" means, and its
+      # default rule set grows between releases (0.16 enables 413). Callers with no
+      # [tool.ruff.lint] select inherit that, so floating it would red them all.
       ruff_version:
         description: 'Ruff version to lint and format-check with'
         required: false
