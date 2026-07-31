@@ -5,7 +5,7 @@ runs:
   using: composite
   steps:
     - name: Setup Minikube with 2 nodes
-      uses: medyagh/setup-minikube@latest
+      uses: medyagh/setup-minikube@v0.0.21
       with:
         minikube-version: 'latest'
         driver: docker

@@ -1,0 +1,37 @@
+name: Generate Release Notes
+description: >-
+  Build release notes from conventional commits since the previous tag. The
+  output format is defined in docs/release-notes-style.md; hand-written notes
+  should follow the same document.
+
+inputs:
+  tag:
+    description: 'Tag being released (e.g. v1.2.3 or relay/v1.2.3)'
+    required: true
+  path_filter:
+    description: >-
+      Limit commits to ones touching this path (e.g. ./relay for a monorepo
+      component). Empty means every commit in the range.
+    required: false
+    default: ''
+  output_file:
+    description: 'File the notes are written to'
+    required: false
+    default: 'release-notes.md'
+
+outputs:
+  previous_tag:
+    description: 'Tag the commit range started from (empty on a first release)'
+    value: ${{ steps.notes.outputs.previous_tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate notes
+      id: notes
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        PATH_FILTER: ${{ inputs.path_filter }}
+        OUTPUT_FILE: ${{ inputs.output_file }}
+      run: ${{ github.action_path }}/notes.sh

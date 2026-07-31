@@ -34,19 +34,21 @@ jobs:
           - claude-code
           - derper
           - gocryptfs-docker
-          - homeassistant-mcp
+          - infra-ci
           - kubernetes-ping-exporter
-          - nodered-mcp-server
-          - portfolio
+          - landing-page
+          - plausible-exporter
+          - pushward-ai
+          - pushward-backrest
           - pushward-bambulab
+          - pushward-forgejo
           - pushward-github
           - pushward-grafana
+          - pushward-mcp
           - pushward-relay
           - pushward-sabnzbd
           - pushward-server
-          - pushward-unraid
           - pushward-web
-          - tcp-endpoint-check-exporter
           - ux-ui-site
           - webhook-capture
     steps:

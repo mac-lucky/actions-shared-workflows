@@ -1,0 +1,99 @@
+---
+name: Reusable Auto Tag Workflow
+
+# Creates the release tag the CI/CD reusables publish from. Callers run this on
+# pushes to their default branch (usually with a paths: filter); the tag push
+# then triggers the caller's own release build. TAG_PUSH_TOKEN must be a PAT:
+# refs pushed with github.token do not trigger workflows, so the release build
+# would never start.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: >-
+          upstream-arg: tag v<value> of a Dockerfile ARG, or v<value>-rN when
+          that tag already exists (rebuild of the same upstream version).
+          patch: bump the patch component of the newest v* tag (v0.1.0 when no
+          tag exists yet).
+        required: true
+        type: string
+      arg_name:
+        description: 'Dockerfile ARG holding the upstream version (upstream-arg mode)'
+        required: false
+        type: string
+        default: ''
+      dockerfile_path:
+        description: 'Dockerfile read in upstream-arg mode'
+        required: false
+        type: string
+        default: './Dockerfile'
+    secrets:
+      TAG_PUSH_TOKEN:
+        description: 'PAT with repo scope, used to push the tag so it triggers workflows'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: Create release tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.TAG_PUSH_TOKEN }}
+
+      - name: Compute and push tag
+        env:
+          MODE: ${{ inputs.mode }}
+          ARG_NAME: ${{ inputs.arg_name }}
+          DOCKERFILE: ${{ inputs.dockerfile_path }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            upstream-arg)
+              if [ -z "$ARG_NAME" ]; then
+                echo "arg_name is required in upstream-arg mode"
+                exit 1
+              fi
+              RAW=$(grep -oE "^ARG ${ARG_NAME}=\"?[^\" ]+" "$DOCKERFILE" | head -n1 | cut -d= -f2 | tr -d '"')
+              if [ -z "$RAW" ]; then
+                echo "ARG ${ARG_NAME} not found in ${DOCKERFILE}"
+                exit 1
+              fi
+              BASE="v${RAW#v}"
+              if ! git rev-parse -q --verify "refs/tags/${BASE}" > /dev/null; then
+                TAG="$BASE"
+              else
+                # Same upstream version rebuilt (base image bump, Dockerfile
+                # fix): count up a -rN suffix.
+                N=$(git tag --list "${BASE}-r*" | sed -E 's/^.*-r([0-9]+)$/\1/' | sort -n | tail -n1)
+                TAG="${BASE}-r$(( ${N:-0} + 1 ))"
+              fi
+              ;;
+            patch)
+              LAST=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+              if [ -z "$LAST" ]; then
+                TAG="v0.1.0"
+              else
+                TAG=$(echo "${LAST#v}" | awk -F. -v OFS=. '{$3++; print "v"$0}')
+              fi
+              ;;
+            *)
+              echo "Unknown mode: $MODE"
+              exit 1
+              ;;
+          esac
+          if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null; then
+            echo "Tag ${TAG} already exists; nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "refs/tags/${TAG}"
+          echo "Pushed ${TAG}"

@@ -168,27 +168,35 @@ on:
         type: string
         default: 'v2.28.0'
       
-      # Deployment
+      # Deployment. Tag pushes always publish: the tag may be plain "v<semver>"
+      # or prefixed "<name>/v<semver>" (the prefix is stripped before parsing),
+      # and the image gets X.Y.Z, X.Y, X (for >=1.0) and latest tags plus a
+      # GitHub Release with generated notes.
       enable_auto_version:
-        description: 'Enable automatic version increment'
+        description: '(deprecated, ignored) publishing is tag-gated; versions come from the git tag'
         required: false
         type: boolean
         default: true
       enable_main_dev_tag:
-        description: 'On main pushes, publish :main + :main-<short-sha> instead of auto-bumping a patch version. Mutually exclusive with enable_auto_version (this takes precedence).'
+        description: 'On main pushes, additionally publish :main + :main-<short-sha> dev images (used by repos that deploy from main between releases)'
         required: false
         type: boolean
         default: false
       release_on_tag:
-        description: 'Build and publish on refs/tags/* pushes using semver tags (X.Y.Z, X.Y, X for >=1.0, latest). Tag may be plain "v<semver>" or prefixed "<name>/v<semver>" (the prefix is stripped before semver parsing).'
+        description: '(deprecated, ignored) tag pushes always publish now'
         required: false
         type: boolean
         default: false
       push_on_main:
-        description: 'Push images when merging to main branch'
+        description: '(deprecated, ignored) main pushes only build and test; use enable_main_dev_tag for dev images'
         required: false
         type: boolean
         default: true
+      release_notes_path_filter:
+        description: 'Limit release-note commits to this path (e.g. ./relay for a monorepo component); empty includes all commits'
+        required: false
+        type: string
+        default: ''
       push_to_dockerhub:
         description: 'Push images to Docker Hub (in addition to GHCR)'
         required: false
@@ -291,7 +299,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.setup.outputs.go-version }}
           cache: true
@@ -326,7 +334,7 @@ jobs:
       # minutes on a 2-core runner, and code-analysis gates the container build.
       - name: Cache analysis tool
         if: matrix.tool != 'go-vet'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/bin/${{ matrix.tool }}
           key: gotool-${{ matrix.tool }}-${{ runner.os }}-${{ runner.arch }}-${{ needs.setup.outputs.go-version }}-${{ inputs.staticcheck_version }}-${{ inputs.govulncheck_version }}-${{ inputs.gosec_version }}
@@ -409,7 +417,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ needs.setup.outputs.go-version }}
           cache: true
@@ -658,8 +666,9 @@ jobs:
     needs: [check-changes, setup, build-container, container-test, kubernetes-test]
     # always() switches off the implicit "skip when a dependency failed" rule, so
     # build-container has to be checked explicitly or a failed image build still
-    # publishes.
-    if: ${{ always() && needs.build-container.result == 'success' && (((github.event_name == 'push' && inputs.push_on_main) && github.ref == format('refs/heads/{0}', inputs.main_branch)) || (github.event_name == 'push' && inputs.release_on_tag && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
+    # publishes. Publishing is tag-gated; the only other publish path is the
+    # opt-in :main dev image.
+    if: ${{ always() && needs.build-container.result == 'success' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || (inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true')) && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
     permissions:
       contents: read
       packages: write
@@ -711,12 +720,18 @@ jobs:
           password: ${{ github.token }}
 
       - name: Compute release version (tag push)
-        if: ${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         id: rel
         run: |
           REF="${GITHUB_REF#refs/tags/}"
           SEMVER_TAG="${REF##*/}"
           VERSION="${SEMVER_TAG#v}"
+          # The version is interpolated into shell steps and image tags, and it
+          # derives from a ref name any writer can craft: accept bare semver only.
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "Refusing to build: tag '$REF' is not a semver tag."
+            exit 1
+          fi
           MAJOR_MINOR="${VERSION%.*}"
           MAJOR="${VERSION%%.*}"
           if [[ "$MAJOR" == "0" ]]; then IS_PRE_ONE=true; else IS_PRE_ONE=false; fi
@@ -727,39 +742,16 @@ jobs:
             echo "is_pre_one=$IS_PRE_ONE"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Get latest version tag (auto-version mode)
-        if: ${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag }}
-        id: get_latest_version
-        run: |
-          # Extract image name from GHCR URL (e.g., ghcr.io/mac-lucky/app-name -> app-name)
-          IMAGE_NAME=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|.*/||')
-          OWNER=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
-
-          # Get tags from GHCR using GitHub API
-          LATEST_TAG=$(curl -s \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
-            jq -r '.[].metadata.container.tags[]' | \
-            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
-            sort -V | tail -n 1 || echo "")
-          echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
-
       - name: Set version
         id: set_version
         run: |
-          if [[ "${{ inputs.release_on_tag }}" == "true" && "$GITHUB_REF" == refs/tags/* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             NEW_VERSION="${{ steps.rel.outputs.version }}"
           elif [[ "${{ inputs.enable_main_dev_tag }}" == "true" && "$GITHUB_REF" == "refs/heads/${{ inputs.main_branch }}" ]]; then
             NEW_VERSION="main-${GITHUB_SHA:0:7}"
-          elif [[ "${{ inputs.enable_auto_version }}" == "true" ]]; then
-            if [[ -z "$LATEST_TAG" ]]; then
-              NEW_VERSION="1.0.0"
-            else
-              NEW_VERSION=$(echo "$LATEST_TAG" | awk -F. -v OFS=. '{$NF++;print}')
-            fi
           else
-            NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+            echo "Refusing to build: unexpected ref ${GITHUB_REF} reached the publish job."
+            exit 1
           fi
           echo "NEW_VERSION=${NEW_VERSION}" >> "$GITHUB_ENV"
           echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
@@ -772,14 +764,12 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=${{ steps.rel.outputs.version }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.rel.outputs.major_minor }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.rel.outputs.major }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') && steps.rel.outputs.is_pre_one == 'false' }}
-            type=raw,value=latest,enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.rel.outputs.version }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.rel.outputs.major_minor }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.rel.outputs.major }},enable=${{ startsWith(github.ref, 'refs/tags/') && steps.rel.outputs.is_pre_one == 'false' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(steps.rel.outputs.version, '-') }}
             type=raw,value=main,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
             type=sha,prefix=main-,format=short,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
-            type=raw,value=${{ env.NEW_VERSION }},enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
-            type=raw,value=latest,enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
 
       # Build this single arch into the local daemon so it can be scanned before push
       # (single-platform builds support load:true; multi-platform ones do not). Warms
@@ -808,7 +798,7 @@ jobs:
       - name: Container security scan (Grype)
         id: scan
         if: ${{ inputs.enable_security_scan }}
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           image: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
@@ -859,7 +849,7 @@ jobs:
     name: Create Multi-arch Manifest
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, build]
-    if: ${{ always() && needs.build.result == 'success' && (((github.event_name == 'push' && inputs.push_on_main) && github.ref == format('refs/heads/{0}', inputs.main_branch)) || (github.event_name == 'push' && inputs.release_on_tag && startsWith(github.ref, 'refs/tags/')) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
+    if: ${{ always() && needs.build.result == 'success' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || (inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch))) }}
     permissions:
       contents: read
       packages: write
@@ -887,14 +877,12 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=${{ needs.build.outputs.version }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ needs.build.outputs.major_minor }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ needs.build.outputs.major }},enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') && needs.build.outputs.is_pre_one == 'false' }}
-            type=raw,value=latest,enable=${{ inputs.release_on_tag && startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ needs.build.outputs.version }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ needs.build.outputs.major_minor }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ needs.build.outputs.major }},enable=${{ startsWith(github.ref, 'refs/tags/') && needs.build.outputs.is_pre_one == 'false' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(needs.build.outputs.version, '-') }}
             type=raw,value=main,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
             type=sha,prefix=main-,format=short,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
-            type=raw,value=${{ env.NEW_VERSION }},enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
-            type=raw,value=latest,enable=${{ inputs.enable_auto_version && !inputs.enable_main_dev_tag && !inputs.release_on_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
@@ -932,7 +920,7 @@ jobs:
 
       - name: Generate SBOM
         if: ${{ inputs.enable_sbom }}
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
           format: spdx-json
@@ -951,10 +939,52 @@ jobs:
     name: Post-deployment Verification
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, merge]
-    if: ${{ always() && needs.merge.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == format('refs/heads/{0}', inputs.main_branch) || (inputs.release_on_tag && startsWith(github.ref, 'refs/tags/'))) }}
+    if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Verify deployed image
         uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@master
         with:
           registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
           github_token: ${{ github.token }}
+
+  # Job 10: GitHub Release with generated notes
+  # No permissions block on purpose: it inherits the caller job's grant, which
+  # must include contents:write for tag runs. Declaring it here would instead
+  # compile-fail every caller that grants less on every event.
+  release:
+    name: GitHub Release
+    runs-on: ${{ inputs.runner_default }}
+    needs: [build, merge]
+    if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download SBOM artifact
+        if: ${{ inputs.enable_sbom }}
+        uses: actions/download-artifact@v8
+        with:
+          name: sbom
+
+      - name: Generate release notes
+        uses: mac-lucky/actions-shared-workflows/.github/actions/generate-release-notes@master
+        with:
+          tag: ${{ github.ref_name }}
+          path_filter: ${{ inputs.release_notes_path_filter }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS=""
+          if [ -f sbom.spdx.json ]; then
+            ASSETS="sbom.spdx.json"
+          fi
+          # shellcheck disable=SC2086
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            $ASSETS

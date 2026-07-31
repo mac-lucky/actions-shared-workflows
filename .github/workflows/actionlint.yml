@@ -1,0 +1,56 @@
+---
+name: Lint Workflows
+
+# Self-check for this repo. A syntax error that lands on master breaks CI in
+# every caller at once, so workflow and action changes get linted before merge.
+
+on:
+  push:
+    branches: [master]
+    paths: ['.github/**']
+  pull_request:
+    paths: ['.github/**']
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+
+      # actionlint runs shellcheck on every run: block itself; reusable
+      # workflows use workflow_call inputs actionlint understands natively.
+      # SC2086/SC2046/SC2129 are quoting and style advisories that the existing
+      # scripts trip all over (unquoted $GITHUB_OUTPUT, intentional word
+      # splitting for imagetools args); the gate is for real errors.
+      - name: Run actionlint
+        run: ./actionlint -color -ignore 'SC2086' -ignore 'SC2046' -ignore 'SC2129'
+
+  shellcheck:
+    name: shellcheck action scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Composite actions that keep their logic in a standalone script (rather
+      # than inline in action.yml) get that script checked here.
+      - name: Shellcheck scripts
+        run: |
+          shopt -s globstar nullglob
+          files=(.github/actions/**/*.sh)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No scripts to check"
+            exit 0
+          fi
+          # -S warning: info-level advisories (e.g. SC2153 on env-provided
+          # variables) do not fail the gate.
+          shellcheck -S warning "${files[@]}"

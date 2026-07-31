@@ -101,22 +101,29 @@ on:
         type: boolean
         default: true
 
-      # Deployment
+      # Deployment. Tag pushes (vX.Y.Z) always publish: the image is tagged
+      # with the version plus latest, and a GitHub Release with generated notes
+      # is created.
       enable_auto_version:
-        description: 'Enable automatic version increment'
+        description: '(deprecated, ignored) publishing is tag-gated; versions come from the git tag'
         required: false
         type: boolean
         default: true
       push_on_main:
-        description: 'Push images when merging to main branch'
+        description: '(deprecated, ignored) main pushes only build and test'
         required: false
         type: boolean
         default: true
       push_on_tag:
-        description: 'Push images on git tag pushes (vX.Y.Z); the image is tagged with the version'
+        description: '(deprecated, ignored) tag pushes always publish now'
         required: false
         type: boolean
         default: false
+      release_notes_path_filter:
+        description: 'Limit release-note commits to this path; empty includes all commits'
+        required: false
+        type: string
+        default: ''
       push_to_dockerhub:
         description: 'Push images to Docker Hub (in addition to GHCR)'
         required: false
@@ -240,7 +247,7 @@ jobs:
 
       - name: Set up Node.js
         if: ${{ matrix.tool != 'grype' }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ needs.setup.outputs.node-version }}
 
@@ -367,7 +374,8 @@ jobs:
     # always() switches off the implicit "skip when a dependency failed" rule, so
     # build-container has to be checked explicitly - otherwise a failed image build
     # (or a failed code-analysis, which skips build-container) still publishes.
-    if: ${{ ((((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true') || (github.event_name == 'push' && inputs.push_on_tag && startsWith(github.ref, 'refs/tags/'))) && (always() && needs.build-container.result == 'success' && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped')) }}
+    # Publishing is tag-gated.
+    if: ${{ always() && needs.build-container.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') }}
     permissions:
       contents: read
       packages: write
@@ -419,45 +427,14 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
 
-      - name: Get latest version tag
-        # On a tag push the version comes from the ref, so the GHCR lookup is dead work.
-        if: ${{ inputs.enable_auto_version && github.ref_type != 'tag' }}
-        id: get_latest_version
-        run: |
-          # Extract image name from GHCR URL (e.g., ghcr.io/mac-lucky/app-name -> app-name)
-          IMAGE_NAME=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|.*/||')
-          OWNER=$(echo "${{ env.REGISTRY_IMAGE_GHCR }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
-
-          # Get tags from GHCR using GitHub API
-          LATEST_TAG=$(curl -s \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
-            jq -r '.[].metadata.container.tags[]' | \
-            grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
-            sort -V | tail -n 1 || echo "")
-          echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_ENV
-
       - name: Set version
         id: set_version
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            # Tag-driven release: the version is the tag itself, minus a leading v.
-            NEW_VERSION="${GITHUB_REF_NAME#v}"
-          elif [ "${{ inputs.enable_auto_version }}" = "true" ]; then
-            VERSION=${{ env.LATEST_TAG }}
-            if [ -z "$VERSION" ]; then
-              NEW_VERSION="0.1.0"
-            else
-              NEW_VERSION=$(echo $VERSION | awk -F. -v OFS=. '{$NF++;print}')
-            fi
-          else
-            # Use git tag or default version
-            NEW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.1.0")
-          fi
-          # NEW_VERSION is interpolated into later shell steps (the merge job), and on
-          # the tag path it derives from a ref name any writer can craft, so reject
-          # anything that is not a bare semver before it can reach a shell.
+          # Tag-driven release: the version is the tag itself, minus a leading v.
+          NEW_VERSION="${GITHUB_REF_NAME#v}"
+          # NEW_VERSION is interpolated into later shell steps (the merge job), and
+          # it derives from a ref name any writer can craft, so reject anything
+          # that is not a bare semver before it can reach a shell.
           if ! printf '%s' "$NEW_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
             echo "Refusing to build: version '$NEW_VERSION' is not a bare semver (ref: ${GITHUB_REF_NAME})."
             exit 1
@@ -501,7 +478,7 @@ jobs:
       - name: Container security scan (Grype)
         id: scan
         if: ${{ inputs.enable_security_scan }}
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           image: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
@@ -553,7 +530,7 @@ jobs:
     name: Create Multi-arch Manifest
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup, build]
-    if: ${{ always() && needs.build.result == 'success' && ((((github.event_name == 'push' && inputs.push_on_main) || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true' && needs.check-changes.outputs.workflow-changed != 'true') || (github.event_name == 'push' && inputs.push_on_tag && startsWith(github.ref, 'refs/tags/'))) }}
+    if: ${{ always() && needs.build.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: read
       packages: write
@@ -619,7 +596,7 @@ jobs:
 
       - name: Generate SBOM
         if: ${{ inputs.enable_sbom }}
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
           format: spdx-json
@@ -638,10 +615,52 @@ jobs:
     name: Post-deployment Verification
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, merge]
-    if: ${{ always() && needs.merge.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.workflow-changed != 'true' }}
+    if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Verify deployed image
         uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@master
         with:
           registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
           github_token: ${{ github.token }}
+
+  # Job 9: GitHub Release with generated notes
+  # No permissions block on purpose: it inherits the caller job's grant, which
+  # must include contents:write for tag runs. Declaring it here would instead
+  # compile-fail every caller that grants less on every event.
+  release:
+    name: GitHub Release
+    runs-on: ${{ inputs.runner_default }}
+    needs: [build, merge]
+    if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download SBOM artifact
+        if: ${{ inputs.enable_sbom }}
+        uses: actions/download-artifact@v8
+        with:
+          name: sbom
+
+      - name: Generate release notes
+        uses: mac-lucky/actions-shared-workflows/.github/actions/generate-release-notes@master
+        with:
+          tag: ${{ github.ref_name }}
+          path_filter: ${{ inputs.release_notes_path_filter }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS=""
+          if [ -f sbom.spdx.json ]; then
+            ASSETS="sbom.spdx.json"
+          fi
+          # shellcheck disable=SC2086
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            $ASSETS
