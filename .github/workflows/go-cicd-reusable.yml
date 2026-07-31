@@ -765,8 +765,8 @@ jobs:
             latest=false
           tags: |
             type=raw,value=${{ steps.rel.outputs.version }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.rel.outputs.major_minor }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.rel.outputs.major }},enable=${{ startsWith(github.ref, 'refs/tags/') && steps.rel.outputs.is_pre_one == 'false' }}
+            type=raw,value=${{ steps.rel.outputs.major_minor }},enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(steps.rel.outputs.version, '-') }}
+            type=raw,value=${{ steps.rel.outputs.major }},enable=${{ startsWith(github.ref, 'refs/tags/') && steps.rel.outputs.is_pre_one == 'false' && !contains(steps.rel.outputs.version, '-') }}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(steps.rel.outputs.version, '-') }}
             type=raw,value=main,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
             type=sha,prefix=main-,format=short,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
@@ -878,8 +878,8 @@ jobs:
             latest=false
           tags: |
             type=raw,value=${{ needs.build.outputs.version }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ needs.build.outputs.major_minor }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ needs.build.outputs.major }},enable=${{ startsWith(github.ref, 'refs/tags/') && needs.build.outputs.is_pre_one == 'false' }}
+            type=raw,value=${{ needs.build.outputs.major_minor }},enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(needs.build.outputs.version, '-') }}
+            type=raw,value=${{ needs.build.outputs.major }},enable=${{ startsWith(github.ref, 'refs/tags/') && needs.build.outputs.is_pre_one == 'false' && !contains(needs.build.outputs.version, '-') }}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(needs.build.outputs.version, '-') }}
             type=raw,value=main,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
             type=sha,prefix=main-,format=short,enable=${{ inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) }}
@@ -909,9 +909,15 @@ jobs:
         if: ${{ inputs.push_to_dockerhub }}
         working-directory: ${{ runner.temp }}/digests
         run: |
+          LATEST=""
+          case "${{ env.NEW_VERSION }}" in
+            *-*) ;;  # prerelease never moves latest, matching the GHCR tag set
+            *) LATEST="-t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest" ;;
+          esac
+          # shellcheck disable=SC2086
           docker buildx imagetools create \
             -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }} \
-            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest \
+            $LATEST \
             $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
 
       - name: Inspect image
@@ -938,7 +944,7 @@ jobs:
   post-deploy-verify:
     name: Post-deployment Verification
     runs-on: ${{ inputs.runner_default }}
-    needs: [check-changes, merge]
+    needs: [check-changes, build, merge]
     if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
       - name: Verify deployed image
@@ -946,6 +952,7 @@ jobs:
         with:
           registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
           github_token: ${{ github.token }}
+          tag: ${{ needs.build.outputs.new-version }}
 
   # Job 10: GitHub Release with generated notes
   # No permissions block on purpose: it inherits the caller job's grant, which
@@ -982,9 +989,19 @@ jobs:
           if [ -f sbom.spdx.json ]; then
             ASSETS="sbom.spdx.json"
           fi
-          # shellcheck disable=SC2086
-          gh release create "${GITHUB_REF_NAME}" \
-            --verify-tag \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file release-notes.md \
-            $ASSETS
+          # Idempotent: re-running a tag workflow (a normal recovery path) must
+          # refresh the release, not die on "already exists".
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release edit "${GITHUB_REF_NAME}" --notes-file release-notes.md
+            if [ -n "$ASSETS" ]; then
+              # shellcheck disable=SC2086
+              gh release upload "${GITHUB_REF_NAME}" $ASSETS --clobber
+            fi
+          else
+            # shellcheck disable=SC2086
+            gh release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file release-notes.md \
+              $ASSETS
+          fi

@@ -10,15 +10,20 @@ OUTPUT_FILE="${OUTPUT_FILE:-release-notes.md}"
 REPO="${GITHUB_REPOSITORY:-}"
 
 # Tags are plain (v1.2.3) or prefixed (relay/v1.2.3). The previous tag is the
-# newest tag sharing the prefix, excluding the one being released. Rebuild tags
-# (v1.2.3-r1) sort after their base under version sort, which is what we want:
-# the range for v1.2.3-r2 starts at v1.2.3-r1.
+# nearest same-prefix ancestor of the released commit - NOT the highest-sorting
+# tag: repos that carry legacy tags numbered above the new release line (e.g.
+# pushward-server's vX.Y.Z-bN app-build markers) would otherwise get a wrong
+# range forever. Fall back to the version sort only when ancestry finds nothing
+# (e.g. the tag sits on a rewritten branch).
 PREFIX=""
 if [[ "$TAG" == */* ]]; then
   PREFIX="${TAG%/*}/"
 fi
 
-PREV=$(git tag --list "${PREFIX}v*" --sort=-version:refname | grep -Fxv "$TAG" | head -n1 || true)
+PREV=$(git describe --tags --abbrev=0 --match "${PREFIX}v*" --exclude "$TAG" "${TAG}^" 2>/dev/null || true)
+if [ -z "$PREV" ]; then
+  PREV=$(git tag --list "${PREFIX}v*" --sort=-version:refname | grep -Fxv "$TAG" | head -n1 || true)
+fi
 {
   echo "previous_tag=${PREV}"
 } >> "${GITHUB_OUTPUT:-/dev/null}"
@@ -36,7 +41,11 @@ fi
 
 git_log() {
   if [ -n "$PATH_FILTER" ]; then
-    git log --no-merges --format='%h %s' "${PREV}..${TAG}" -- "$PATH_FILTER"
+    # Deliberate word split: the filter may carry several pathspecs, e.g.
+    # "./relay ./shared" for a monorepo component plus the module it embeds.
+    local -a paths
+    read -ra paths <<< "$PATH_FILTER"
+    git log --no-merges --format='%h %s' "${PREV}..${TAG}" -- "${paths[@]}"
   else
     git log --no-merges --format='%h %s' "${PREV}..${TAG}"
   fi

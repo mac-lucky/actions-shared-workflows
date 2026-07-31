@@ -41,6 +41,18 @@ jobs:
     name: Create release tag
     runs-on: ubuntu-latest
     steps:
+      # An unset caller secret passes the required:true declaration as an empty
+      # string and then fails inside checkout with an unhelpful message; fail
+      # first with one that says what to do.
+      - name: Require TAG_PUSH_TOKEN
+        env:
+          TOKEN: ${{ secrets.TAG_PUSH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::TAG_PUSH_TOKEN is empty - add a repo-scoped PAT as the TAG_PUSH_TOKEN Actions secret in this repository"
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -60,7 +72,7 @@ jobs:
                 echo "arg_name is required in upstream-arg mode"
                 exit 1
               fi
-              RAW=$(grep -oE "^ARG ${ARG_NAME}=\"?[^\" ]+" "$DOCKERFILE" | head -n1 | cut -d= -f2 | tr -d '"')
+              RAW=$(grep -oE "^ARG ${ARG_NAME}=\"?[^\" ]+" "$DOCKERFILE" | head -n1 | cut -d= -f2 | tr -d '"' || true)
               if [ -z "$RAW" ]; then
                 echo "ARG ${ARG_NAME} not found in ${DOCKERFILE}"
                 exit 1

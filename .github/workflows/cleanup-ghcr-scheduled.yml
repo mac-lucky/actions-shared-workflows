@@ -15,8 +15,36 @@ permissions:
   contents: read
 
 jobs:
+  # The image list is discovered, not hand-maintained: the static matrix
+  # drifted in both directions twice (missing live images whose untagged
+  # versions then piled up; dead entries for deleted packages). Same discovery
+  # scan-ghcr-scheduled.yml uses.
+  discover:
+    name: Discover images
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+    steps:
+      - name: List container packages
+        id: list
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_CLEANUP_TOKEN }}
+        run: |
+          set -euo pipefail
+          images=$(gh api --paginate "/user/packages?package_type=container&per_page=100" \
+            -q '[.[].name]' | jq -sc 'add | sort')
+          count=$(jq length <<< "$images")
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No container packages returned - check GHCR_CLEANUP_TOKEN scope"
+            exit 1
+          fi
+          echo "Discovered $count images"
+          jq -r '.[]' <<< "$images"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
   cleanup:
     name: Cleanup ${{ matrix.image }}
+    needs: discover
     runs-on: ubuntu-latest
     # No continue-on-error: fail-fast:false already stops one bad image from
     # cancelling the rest, and continue-on-error additionally reports the job as
@@ -27,30 +55,7 @@ jobs:
       # DELETE at 5 points against a 900/min budget.
       max-parallel: 2
       matrix:
-        image:
-          - bambulab-timelapse-downloader
-          - bazarr-auto-translate
-          - caddy-cloudflare
-          - claude-code
-          - derper
-          - gocryptfs-docker
-          - infra-ci
-          - kubernetes-ping-exporter
-          - landing-page
-          - plausible-exporter
-          - pushward-ai
-          - pushward-backrest
-          - pushward-bambulab
-          - pushward-forgejo
-          - pushward-github
-          - pushward-grafana
-          - pushward-mcp
-          - pushward-relay
-          - pushward-sabnzbd
-          - pushward-server
-          - pushward-web
-          - ux-ui-site
-          - webhook-capture
+        image: ${{ fromJson(needs.discover.outputs.images) }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

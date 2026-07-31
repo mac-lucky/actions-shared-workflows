@@ -11,6 +11,13 @@
       "automerge": true
     },
     {
+      "description": "Pre-1.0 software uses the minor slot for breaking changes; those wait for review",
+      "matchUpdateTypes": ["minor"],
+      "matchCurrentVersion": "<1.0.0",
+      "automerge": false,
+      "labels": ["major"]
+    },
+    {
       "description": "Majors stay manual and get flagged; the Dependency Dashboard issue lists them per repo",
       "matchUpdateTypes": ["major"],
       "labels": ["major"]

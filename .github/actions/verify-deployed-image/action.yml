@@ -8,6 +8,13 @@ inputs:
   github_token:
     description: GitHub token for GHCR authentication
     required: true
+  tag:
+    description: >-
+      Image tag to verify. Callers pass the version they just published;
+      prerelease versions never move latest, so verifying latest would check
+      a stale artifact.
+    required: false
+    default: latest
 
 runs:
   using: composite
@@ -22,13 +29,13 @@ runs:
     - name: Verify image pull and functionality
       shell: bash
       run: |
-        echo "Verifying images can be pulled from GHCR..."
+        echo "Verifying ${{ inputs.registry_image }}:${{ inputs.tag }} can be pulled from GHCR..."
         for i in $(seq 1 5); do
-          if docker pull ${{ inputs.registry_image }}:latest; then
+          if docker pull ${{ inputs.registry_image }}:${{ inputs.tag }}; then
             break
           fi
           echo "Attempt $i/5 failed, retrying in 15s..."
           sleep 15
         done
-        docker inspect ${{ inputs.registry_image }}:latest > /dev/null
-        echo "✅ Image verification successful"
+        docker inspect ${{ inputs.registry_image }}:${{ inputs.tag }} > /dev/null
+        echo "Image verification successful"
