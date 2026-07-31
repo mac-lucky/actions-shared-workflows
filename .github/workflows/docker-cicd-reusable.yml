@@ -1,6 +1,14 @@
 ---
 name: Reusable Docker CI/CD Workflow
 
+# Tag-gated model: every event runs the test job (single-arch build, Grype
+# scan, optional smoke test); only pushes of a version tag (vX.Y.Z, optionally
+# -rN for a rebuild of the same upstream version) build both arches, push to
+# the registries, and cut a GitHub Release with generated notes. Upstream
+# version tracking moved to Renovate custom managers in each caller repo: the
+# Dockerfile ARG is the single source of truth, and the auto-tag workflow turns
+# a merged bump into the tag that triggers the release.
+
 on:
   workflow_call:
     secrets:
@@ -25,24 +33,46 @@ on:
         description: 'GHCR image name (e.g., ghcr.io/mac-lucky/app-name)'
         required: true
         type: string
-      
-      # Version checking configuration
+
+      # Deprecated inputs. Declared so existing callers keep compiling; the
+      # machinery they controlled (upstream polling, schedule builds, version
+      # build-arg injection) was replaced by Renovate + tag-gated releases.
       upstream_repo:
-        description: 'Upstream GitHub repository for version checking (e.g., caddyserver/caddy, tailscale/tailscale)'
+        description: '(deprecated, ignored) upstream tracking moved to Renovate custom managers'
         required: false
         type: string
         default: ''
       version_strip_prefix:
-        description: 'Prefix to strip from version tags (e.g., "v" for v2.8.4 -> 2.8.4)'
+        description: '(deprecated, ignored)'
         required: false
         type: string
         default: 'v'
       build_arg_name:
-        description: 'Build argument name for version (e.g., CADDY_VERSION, DERP_VERSION)'
+        description: '(deprecated, ignored) Dockerfile ARG defaults are the source of truth'
         required: false
         type: string
         default: ''
-      
+      enable_version_check:
+        description: '(deprecated, ignored)'
+        required: false
+        type: boolean
+        default: false
+      enable_schedule_build:
+        description: '(deprecated, ignored)'
+        required: false
+        type: boolean
+        default: true
+      force_build:
+        description: '(deprecated, ignored)'
+        required: false
+        type: boolean
+        default: false
+      platforms:
+        description: '(deprecated, ignored) the arch matrix is fixed to linux/amd64 + linux/arm64'
+        required: false
+        type: string
+        default: 'linux/amd64,linux/arm64'
+
       # Build configuration
       dockerfile_path:
         description: 'Path to Dockerfile'
@@ -54,29 +84,17 @@ on:
         required: false
         type: string
         default: '.'
-      platforms:
-        description: 'Target platforms for multi-arch build'
+
+      # Test configuration
+      smoke_test_script:
+        description: >-
+          Shell script run against the freshly built amd64 image in the test
+          job; the image reference is in $SMOKE_IMAGE. A non-zero exit fails
+          the job (and so blocks any publish that needs it).
         required: false
         type: string
-        default: 'linux/amd64,linux/arm64'
-      
-      # Trigger configuration
-      enable_version_check:
-        description: 'Enable upstream version checking and BUILD_NEEDED logic'
-        required: false
-        type: boolean
-        default: false
-      enable_schedule_build:
-        description: 'Enable builds on schedule triggers'
-        required: false
-        type: boolean
-        default: true
-      force_build:
-        description: 'Force build regardless of version check'
-        required: false
-        type: boolean
-        default: false
-      
+        default: ''
+
       # Security and quality
       enable_security_scan:
         description: 'Enable security scanning with Grype'
@@ -116,137 +134,120 @@ env:
   REGISTRY_IMAGE_GHCR: ${{ inputs.ghcr_image }}
 
 jobs:
-  # Job 1: Version Check and Build Decision
-  version-check:
-    name: Version Check and Build Decision
+  # Job 1: Build and test (every event; the PR gate and the release gate)
+  test:
+    name: Build and Test (amd64)
     runs-on: ubuntu-latest
-    outputs:
-      build-needed: ${{ steps.check.outputs.build-needed }}
-      upstream-version: ${{ steps.check.outputs.upstream-version }}
+    # Stale callers may still fire schedule triggers; those no-op here.
+    if: ${{ github.event_name != 'schedule' }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Check if build is needed
-        id: check
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image for test
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ inputs.app_name }}:test
+          cache-from: type=gha,scope=build-linux-amd64
+          cache-to: type=gha,scope=build-linux-amd64,mode=max
+
+      # Build the effective Grype config: the org-wide ignore baseline, plus
+      # (for Go binaries) automatic reachability suppression from govulncheck
+      # VEX. Fail-safe - any error here leaves a valid empty config so the scan
+      # still runs.
+      - name: Prepare Grype policy
+        if: ${{ inputs.enable_security_scan }}
+        shell: bash
+        env:
+          GOVULN_BINARY: ${{ inputs.govulncheck_binary }}
+          SCAN_IMAGE: ${{ inputs.app_name }}:test
         run: |
-          BUILD_NEEDED="false"
-          UPSTREAM_VERSION=""
-
-          # Never push images for pull requests
-          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "pull_request_target" ]; then
-            echo "🔍 Pull request - no image push needed"
-            BUILD_NEEDED="false"
-          # Force build for manual triggers or when version check is disabled
-          elif [ "${{ inputs.force_build }}" = "true" ] || [ "${{ inputs.enable_version_check }}" = "false" ]; then
-            echo "🔨 Force build enabled or version check disabled"
-            BUILD_NEEDED="true"
-          # For workflow_dispatch, always build unless version check explicitly prevents it
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "🔨 Manual workflow dispatch - building"
-            BUILD_NEEDED="true"
-            
-            # Check if version already exists (for informational purposes only)
-            if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
-              UPSTREAM_VERSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
-              if [ "$UPSTREAM_VERSION" = "null" ] || [ -z "$UPSTREAM_VERSION" ]; then
-                echo "⚠️ Failed to get upstream version - API may be rate limited"
-                UPSTREAM_VERSION=""
-              elif [ -n "${{ inputs.version_strip_prefix }}" ]; then
-                UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
-              fi
-              
-              # Check if this version already exists in GHCR
-              IMAGE_NAME=$(echo "${{ inputs.ghcr_image }}" | sed 's|.*/||')
-              OWNER=$(echo "${{ inputs.ghcr_image }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
-
-              EXISTING_VERSION=$(curl -s \
-                -H "Authorization: Bearer ${{ github.token }}" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
-                jq -r '.[].metadata.container.tags[]' | grep "^${UPSTREAM_VERSION}$" || echo "")
-
-              if [ -n "$EXISTING_VERSION" ]; then
-                echo "ℹ️ Note: Version $UPSTREAM_VERSION already exists in GHCR, but building anyway due to manual trigger"
+          set +e
+          POLICY_URL="https://raw.githubusercontent.com/mac-lucky/actions-shared-workflows/master/security/grype-base-policy.yaml"
+          if curl -sSfL "$POLICY_URL" -o ./.grype.yaml && [ -s ./.grype.yaml ]; then
+            echo "Loaded org Grype baseline policy"
+          else
+            printf 'ignore: []\n' > ./.grype.yaml
+            echo "WARN: org policy unavailable; starting from an empty ignore set"
+          fi
+          # A repo may append its own ignore entries. This exists so exemptions
+          # for one image's vendored binaries stay in that repo instead of being
+          # added to the org baseline, where a path glob would silently un-gate
+          # the same path in every other caller.
+          if [ -s ./.grype-ignore.yaml ]; then
+            cat ./.grype-ignore.yaml >> ./.grype.yaml
+            # Concatenating YAML is indentation-sensitive: the repo file's list
+            # items must sit at the same indent as the baseline's. A bad merge
+            # is caught by the yaml.safe_load validation below, which resets to
+            # an empty ignore set.
+            echo "Appended repo-local .grype-ignore.yaml"
+          fi
+          if [ -n "${GOVULN_BINARY}" ]; then
+            cid="$(docker create "${SCAN_IMAGE}" 2>/dev/null)"
+            if [ -n "$cid" ] && docker cp "${cid}:${GOVULN_BINARY}" /tmp/govuln-bin 2>/dev/null; then
+              go install golang.org/x/vuln/cmd/govulncheck@v1.6.0 2>/dev/null
+              GVC="$(go env GOPATH)/bin/govulncheck"
+              if [ -x "$GVC" ] && "$GVC" -mode binary -format openvex /tmp/govuln-bin > ./govulncheck.vex.json 2>/dev/null && [ -s ./govulncheck.vex.json ]; then
+                printf 'vex-documents:\n  - ./govulncheck.vex.json\n' >> ./.grype.yaml
+                echo "Added govulncheck reachability VEX for ${GOVULN_BINARY}"
               else
-                echo "ℹ️ Version $UPSTREAM_VERSION not found in GHCR - new build"
-              fi
-            fi
-          # For push events (not on workflow changes), build
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "🔨 Push event - building"
-            BUILD_NEEDED="true"
-
-            # Get upstream version if configured
-            if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
-              UPSTREAM_VERSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
-              if [ "$UPSTREAM_VERSION" = "null" ] || [ -z "$UPSTREAM_VERSION" ]; then
-                echo "⚠️ Failed to get upstream version - API may be rate limited"
-                UPSTREAM_VERSION=""
-              elif [ -n "${{ inputs.version_strip_prefix }}" ]; then
-                UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
-              fi
-              if [ -n "$UPSTREAM_VERSION" ]; then
-                echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
-              fi
-            fi
-          # For schedule events, check if we should build
-          elif [ "${{ github.event_name }}" = "schedule" ] && [ "${{ inputs.enable_schedule_build }}" = "true" ]; then
-            if [ "${{ inputs.enable_version_check }}" = "true" ] && [ -n "${{ inputs.upstream_repo }}" ]; then
-              echo "📅 Schedule event with version check enabled"
-
-              # Get latest version from upstream
-              UPSTREAM_VERSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/${{ inputs.upstream_repo }}/releases/latest" | jq -r .tag_name)
-              if [ "$UPSTREAM_VERSION" = "null" ] || [ -z "$UPSTREAM_VERSION" ]; then
-                echo "⚠️ Failed to get upstream version - API may be rate limited"
-                echo "⏭️ Skipping build due to version fetch failure"
-                UPSTREAM_VERSION=""
-                BUILD_NEEDED="false"
-              elif [ -n "${{ inputs.version_strip_prefix }}" ]; then
-                UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | sed "s/^${{ inputs.version_strip_prefix }}//")
-              fi
-
-              if [ -n "$UPSTREAM_VERSION" ]; then
-                echo "🔍 Latest upstream version: $UPSTREAM_VERSION"
-
-                # Check if this version already exists in GHCR
-                IMAGE_NAME=$(echo "${{ inputs.ghcr_image }}" | sed 's|.*/||')
-                OWNER=$(echo "${{ inputs.ghcr_image }}" | sed 's|ghcr.io/||' | sed 's|/.*||')
-
-                EXISTING_VERSION=$(curl -s \
-                  -H "Authorization: Bearer ${{ github.token }}" \
-                  -H "Accept: application/vnd.github+json" \
-                  "https://api.github.com/users/$OWNER/packages/container/$IMAGE_NAME/versions?per_page=100" | \
-                  jq -r '.[].metadata.container.tags[]' | grep "^${UPSTREAM_VERSION}$" || echo "")
-
-                if [ -z "$EXISTING_VERSION" ]; then
-                  echo "✅ Version $UPSTREAM_VERSION not found in GHCR - build needed"
-                  BUILD_NEEDED="true"
-                else
-                  echo "⏭️ Version $UPSTREAM_VERSION already exists in GHCR - skipping build"
-                  BUILD_NEEDED="false"
-                fi
+                echo "WARN: govulncheck produced no VEX; skipping reachability layer"
               fi
             else
-              echo "🔨 Schedule event without version check - building"
-              BUILD_NEEDED="true"
+              echo "WARN: could not extract ${GOVULN_BINARY} from image; skipping reachability layer"
             fi
-          else
-            echo "⏭️ No build trigger conditions met"
-            BUILD_NEEDED="false"
+            [ -n "$cid" ] && docker rm "$cid" >/dev/null 2>&1
           fi
-          
-          echo "build-needed=${BUILD_NEEDED}" >> $GITHUB_OUTPUT
-          echo "upstream-version=${UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
-          echo "BUILD_NEEDED=${BUILD_NEEDED}" >> $GITHUB_ENV
-          echo "UPSTREAM_VERSION=${UPSTREAM_VERSION}" >> $GITHUB_ENV
+          if ! python3 -c "import yaml; yaml.safe_load(open('./.grype.yaml'))" 2>/dev/null; then
+            echo "WARN: generated .grype.yaml is invalid; resetting to empty ignore set"
+            printf 'ignore: []\n' > ./.grype.yaml
+          fi
+          echo "----- effective .grype.yaml -----"
+          cat ./.grype.yaml
+          exit 0
 
-  # Job 2: Build platform-specific images in parallel
+      - name: Container security scan (Grype)
+        id: scan
+        if: ${{ inputs.enable_security_scan }}
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          image: ${{ inputs.app_name }}:test
+          severity-cutoff: ${{ inputs.scan_severity_cutoff }}
+          only-fixed: ${{ inputs.scan_only_fixed }}
+          fail-build: ${{ inputs.scan_fail_build }}
+
+      - name: Upload scan SARIF
+        continue-on-error: true
+        if: ${{ inputs.enable_security_scan && always() && steps.scan.outputs.sarif != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: grype-test
+
+      - name: Smoke test
+        if: ${{ inputs.smoke_test_script != '' }}
+        env:
+          SMOKE_IMAGE: ${{ inputs.app_name }}:test
+        run: ${{ inputs.smoke_test_script }}
+
+  # Job 2: Build platform-specific images in parallel (version tags only)
   build:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    needs: version-check
-    if: ${{ needs.version-check.outputs.build-needed == 'true' }}
+    needs: test
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
       packages: write
@@ -260,6 +261,9 @@ jobs:
             runner: ubuntu-latest
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      base_version: ${{ steps.vars.outputs.base_version }}
     steps:
       - name: Prepare platform pair
         run: |
@@ -287,28 +291,24 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ github.token }}
 
-      - name: Prepare build variables
+      - name: Compute version from tag
         id: vars
         run: |
-          # Determine version to use
-          if [ -n "${{ needs.version-check.outputs.upstream-version }}" ]; then
-            VERSION="${{ needs.version-check.outputs.upstream-version }}"
-            echo "🏷️ Using upstream version: $VERSION"
-          else
-            # Fallback to latest or git tag
-            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
-            echo "🏷️ Using fallback version: $VERSION"
+          VERSION="${GITHUB_REF_NAME#v}"
+          # The version is interpolated into shell steps and image tags, and it
+          # derives from a ref name any writer can craft: accept only dotted
+          # numerics with an optional suffix (prerelease or -rN rebuild).
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z.]+)?$'; then
+            echo "Refusing to build: tag '$GITHUB_REF_NAME' is not a version tag."
+            exit 1
           fi
-
+          BASE_VERSION=$(printf '%s' "$VERSION" | sed -E 's/-r[0-9]+$//')
+          {
+            echo "version=$VERSION"
+            echo "base_version=$BASE_VERSION"
+          } >> "$GITHUB_OUTPUT"
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-          # Prepare build args
-          BUILD_ARGS=""
-          if [ -n "${{ inputs.build_arg_name }}" ] && [ -n "$VERSION" ]; then
-            BUILD_ARGS="${{ inputs.build_arg_name }}=${VERSION}"
-            echo "🔧 Build arg: $BUILD_ARGS"
-          fi
-          echo "BUILD_ARGS=${BUILD_ARGS}" >> $GITHUB_ENV
+          echo "BASE_VERSION=${BASE_VERSION}" >> $GITHUB_ENV
 
       - name: Docker meta
         id: meta
@@ -317,6 +317,7 @@ jobs:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
           tags: |
             type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ env.BASE_VERSION }},enable=${{ env.BASE_VERSION != env.VERSION }}
             type=raw,value=latest
 
       # Build this single arch into the local daemon so it can be scanned before
@@ -330,16 +331,14 @@ jobs:
           file: ${{ inputs.dockerfile_path }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ env.BUILD_ARGS }}
           load: true
           push: false
           tags: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
 
-      # Build the effective Grype config: the org-wide ignore baseline, plus (for Go
-      # binaries) automatic reachability suppression from govulncheck VEX. Fail-safe -
-      # any error here leaves a valid empty config so the scan still runs.
+      # Build the effective Grype config; same logic as the test job. Runs per
+      # arch because the arm64 image is a different artifact.
       - name: Prepare Grype policy
         if: ${{ inputs.enable_security_scan }}
         shell: bash
@@ -355,16 +354,8 @@ jobs:
             printf 'ignore: []\n' > ./.grype.yaml
             echo "WARN: org policy unavailable; starting from an empty ignore set"
           fi
-          # A repo may append its own ignore entries. This exists so exemptions
-          # for one image's vendored binaries stay in that repo instead of being
-          # added to the org baseline, where a path glob would silently un-gate
-          # the same path in every other caller.
           if [ -s ./.grype-ignore.yaml ]; then
             cat ./.grype-ignore.yaml >> ./.grype.yaml
-            # Concatenating YAML is indentation-sensitive: the repo file's list
-            # items must sit at the same indent as the baseline's. A bad merge
-            # is caught by grype itself, which exits non-zero on a config it
-            # cannot parse rather than scanning with an empty ignore set.
             echo "Appended repo-local .grype-ignore.yaml"
           fi
           if [ -n "${GOVULN_BINARY}" ]; then
@@ -396,7 +387,7 @@ jobs:
       - name: Container security scan (Grype)
         id: scan
         if: ${{ inputs.enable_security_scan }}
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           image: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
@@ -420,7 +411,6 @@ jobs:
           file: ${{ inputs.dockerfile_path }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ env.BUILD_ARGS }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE_GHCR }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
 
@@ -442,8 +432,8 @@ jobs:
   merge:
     name: Create Multi-arch Manifest
     runs-on: ubuntu-latest
-    needs: [version-check, build]
-    if: ${{ needs.version-check.outputs.build-needed == 'true' }}
+    needs: build
+    if: ${{ always() && needs.build.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
       packages: write
@@ -461,14 +451,9 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Prepare version
-        id: vars
         run: |
-          if [ -n "${{ needs.version-check.outputs.upstream-version }}" ]; then
-            VERSION="${{ needs.version-check.outputs.upstream-version }}"
-          else
-            VERSION="latest"
-          fi
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "VERSION=${{ needs.build.outputs.version }}" >> $GITHUB_ENV
+          echo "BASE_VERSION=${{ needs.build.outputs.base_version }}" >> $GITHUB_ENV
 
       - name: Docker meta
         id: meta
@@ -477,6 +462,7 @@ jobs:
           images: ${{ env.REGISTRY_IMAGE_GHCR }}
           tags: |
             type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ env.BASE_VERSION }},enable=${{ env.BASE_VERSION != env.VERSION }}
             type=raw,value=latest
 
       - name: Log in to Docker Hub
@@ -515,11 +501,11 @@ jobs:
 
       - name: Generate image SBOM (Syft)
         if: ${{ inputs.enable_security_scan }}
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: '${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.VERSION }}'
           format: spdx-json
-          output-file: image-sbom.spdx.json
+          output-file: sbom.spdx.json
           upload-artifact: false
 
       # The image is vuln-scanned per-arch in the build job before push (see build job);
@@ -529,26 +515,59 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: sbom
-          path: image-sbom.spdx.json
+          path: sbom.spdx.json
           retention-days: 7
 
   # Job 4: Post-deployment verification
   post-deploy-verify:
     name: Post-deployment Verification
     runs-on: ubuntu-latest
-    needs: [version-check, merge]
-    if: ${{ needs.version-check.outputs.build-needed == 'true' }}
+    needs: merge
+    if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+      - name: Verify deployed image
+        uses: mac-lucky/actions-shared-workflows/.github/actions/verify-deployed-image@master
         with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ github.token }}
+          registry_image: ${{ env.REGISTRY_IMAGE_GHCR }}
+          github_token: ${{ github.token }}
 
-      - name: Verify image pull and functionality
+  # Job 5: GitHub Release with generated notes
+  # No permissions block on purpose: it inherits the caller job's grant, which
+  # must include contents:write for tag runs. Declaring it here would instead
+  # compile-fail every caller that grants less on every event.
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, merge]
+    if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download SBOM artifact
+        if: ${{ inputs.enable_security_scan }}
+        uses: actions/download-artifact@v8
+        with:
+          name: sbom
+
+      - name: Generate release notes
+        uses: mac-lucky/actions-shared-workflows/.github/actions/generate-release-notes@master
+        with:
+          tag: ${{ github.ref_name }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Verifying images can be pulled from GHCR..."
-          docker pull ${{ env.REGISTRY_IMAGE_GHCR }}:latest
-
-          echo "✅ Image verification successful"
+          ASSETS=""
+          if [ -f sbom.spdx.json ]; then
+            ASSETS="sbom.spdx.json"
+          fi
+          # shellcheck disable=SC2086
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            $ASSETS

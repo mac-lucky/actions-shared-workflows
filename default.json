@@ -1,16 +1,25 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "prConcurrentLimit": 2,
-  "prHourlyLimit": 1,
-  "customManagers": [
+  "extends": ["config:best-practices", ":semanticCommits"],
+  "platformAutomerge": false,
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 0,
+  "packageRules": [
     {
-      "description": "gocryptfs-docker builds a tagged upstream release whose go.mod pins an old golang.org/x/crypto. The Dockerfile raises that floor with go get; this keeps the floor current.",
-      "customType": "regex",
-      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
-      "matchStrings": ["ARG XCRYPTO_VERSION=(?<currentValue>\\S+)"],
-      "depNameTemplate": "golang.org/x/crypto",
-      "datasourceTemplate": "go"
+      "description": "Automerge safe update types; Renovate merges its own PR once every check on it is green",
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
+      "automerge": true
+    },
+    {
+      "description": "Majors stay manual and get flagged; the Dependency Dashboard issue lists them per repo",
+      "matchUpdateTypes": ["major"],
+      "labels": ["major"]
+    },
+    {
+      "description": "Callers ride the shared workflows at @master by design; never pin or update those refs",
+      "matchDepNames": ["mac-lucky/actions-shared-workflows"],
+      "pinDigests": false,
+      "enabled": false
     }
   ]
 }
