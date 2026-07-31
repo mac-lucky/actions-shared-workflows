@@ -3,6 +3,7 @@
   "extends": ["config:best-practices", ":semanticCommits"],
   "platformAutomerge": false,
   "dependencyDashboard": false,
+  "postUpdateOptions": ["gomodTidy"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
   "packageRules": [
