@@ -218,7 +218,7 @@ jobs:
 
           # Try .python-version file
           if [ -z "$PYTHON_VERSION" ] && [ -f "${{ inputs.build_context }}/.python-version" ]; then
-            PYTHON_VERSION=$(cat "${{ inputs.build_context }}/.python-version" | tr -d '[:space:]')
+            PYTHON_VERSION=$(tr -d '[:space:]' < "${{ inputs.build_context }}/.python-version")
           fi
 
           # Try pyproject.toml
