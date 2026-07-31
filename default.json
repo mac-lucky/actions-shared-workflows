@@ -2,6 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:best-practices", ":semanticCommits"],
   "platformAutomerge": false,
+  "dependencyDashboard": false,
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
   "packageRules": [
@@ -27,6 +28,11 @@
       "matchDepNames": ["mac-lucky/actions-shared-workflows"],
       "pinDigests": false,
       "enabled": false
+    },
+    {
+      "description": "svelte-check cannot typecheck under TypeScript 7 yet; lift once the Svelte toolchain supports it",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7.0.0"
     }
   ]
 }
