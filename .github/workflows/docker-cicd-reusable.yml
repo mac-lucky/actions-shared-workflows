@@ -591,3 +591,24 @@ jobs:
               --notes-file release-notes.md \
               $ASSETS
           fi
+
+  # Job 6: the single status check a branch ruleset should require.
+  # Every other job name here ends in a matrix expansion, so a ruleset naming
+  # them directly breaks whenever a platform is added or renamed. This name is
+  # fixed, so callers only ever have to require "<caller job id> / All checks
+  # passed".
+  # No permissions block on purpose, for the same reason as the release job.
+  all-checks:
+    name: All checks passed
+    runs-on: ubuntu-latest
+    needs: [test, build, merge, post-deploy-verify, release]
+    if: ${{ always() }}
+    steps:
+      # skipped counts as a pass: everything from build onwards is gated on the
+      # event being a tag push, so a PR run legitimately skips most of the
+      # workflow and must still report green.
+      - name: Fail if any job did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::one or more jobs failed or were cancelled"
+          exit 1
