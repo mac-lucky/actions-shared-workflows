@@ -1,14 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:best-practices", ":semanticCommits"],
-  "platformAutomerge": false,
   "dependencyDashboard": false,
   "postUpdateOptions": ["gomodTidy"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
   "packageRules": [
     {
-      "description": "Automerge safe update types; Renovate merges its own PR once every check on it is green",
+      "description": "Automerge safe update types. GitHub does the merge itself the moment the required check goes green, so this no longer waits for the next daily Renovate run",
       "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
       "automerge": true
     },
