@@ -7,16 +7,9 @@
   "prHourlyLimit": 0,
   "packageRules": [
     {
-      "description": "Automerge safe update types. GitHub does the merge itself the moment the required check goes green, so this no longer waits for the next daily Renovate run",
+      "description": "Automerge safe update types, pre-1.0 minor bumps included. GitHub does the merge itself the moment the required check goes green, so this no longer waits for the next daily Renovate run",
       "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
       "automerge": true
-    },
-    {
-      "description": "Pre-1.0 software uses the minor slot for breaking changes; those wait for review",
-      "matchUpdateTypes": ["minor"],
-      "matchCurrentVersion": "<1.0.0",
-      "automerge": false,
-      "labels": ["major"]
     },
     {
       "description": "Majors stay manual and get flagged; the Dependency Dashboard issue lists them per repo",
