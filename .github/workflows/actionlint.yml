@@ -18,13 +18,23 @@ jobs:
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: 1.7.12
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Cache actionlint
+        id: cache-actionlint
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ./actionlint
+          key: actionlint-${{ runner.os }}-${{ env.ACTIONLINT_VERSION }}
+
       - name: Download actionlint
+        if: ${{ steps.cache-actionlint.outputs.cache-hit != 'true' }}
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
 
       # actionlint runs shellcheck on every run: block itself; reusable
       # workflows use workflow_call inputs actionlint understands natively.

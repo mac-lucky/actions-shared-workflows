@@ -250,6 +250,20 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ needs.setup.outputs.node-version }}
+          # setup-node has no cache default, so npm ci re-downloaded every
+          # dependency on every leg. Empty string keeps caching off for the bun
+          # path, which caches ~/.bun/install/cache below instead.
+          cache: ${{ inputs.package_manager == 'npm' && 'npm' || '' }}
+
+      # setup-bun caches only the bun binary, not what bun install fetches.
+      - name: Cache bun downloads
+        if: ${{ matrix.tool != 'grype' && inputs.package_manager == 'bun' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock', '**/bun.lockb') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Install dependencies
         if: ${{ matrix.tool != 'grype' }}
@@ -321,8 +335,14 @@ jobs:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
           tags: ${{ inputs.app_name }}:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Same scope as the tag build's amd64 leg: a tag run can only restore
+          # caches written on its own ref or the default branch, so writing the
+          # default "buildkit" scope here left every release build cold.
+          cache-from: type=gha,scope=build-linux-amd64
+          # PRs write mode=min: a PR cache is only restorable by re-runs of the
+          # same PR, and a full mode=max export per PR crowds the repo's 10 GB
+          # cache budget and evicts the branch caches releases restore from.
+          cache-to: type=gha,scope=build-linux-amd64,mode=${{ github.event_name == 'pull_request' && 'min' || 'max' }}
           push: false
           load: true
 
@@ -339,6 +359,43 @@ jobs:
           name: container-image
           path: /tmp/${{ inputs.app_name }}.tar.gz
           retention-days: 1
+
+  # Job 4b: Warm the arm64 layer cache from the default branch. The tag build's
+  # arm64 leg restores scope build-linux-arm64, and a tag run can only read
+  # caches written on its own ref or the default branch - without this job every
+  # release built arm64 from scratch. Deliberately outside the release path and
+  # absent from all-checks: a hiccup here costs one cold build, never a red run.
+  warm-arm64:
+    name: Warm arm64 Build Cache
+    runs-on: ${{ inputs.runner_arm64 }}
+    needs: [check-changes, setup]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && needs.check-changes.outputs.code-changed == 'true' }}
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: ${{ inputs.build_fetch_depth }}
+
+      - name: Set up QEMU
+        if: ${{ !inputs.skip_qemu_setup }}
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build arm64 image for cache
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile_path }}
+          platforms: linux/arm64
+          tags: ${{ inputs.app_name }}:warm-arm64
+          cache-from: type=gha,scope=build-linux-arm64
+          cache-to: type=gha,scope=build-linux-arm64,mode=max
+          push: false
+          build-args: |
+            NODE_VERSION=${{ needs.setup.outputs.node-version }}
 
   # Job 5: Container Integration Tests
   container-test:
