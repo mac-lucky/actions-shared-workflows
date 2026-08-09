@@ -166,6 +166,15 @@ jobs:
           # cache budget and evicts the branch caches releases restore from.
           cache-to: type=gha,scope=build-linux-amd64,mode=${{ github.event_name == 'pull_request' && 'min' || 'max' }}
 
+      # Compiling govulncheck from source takes minutes; the key hardcodes the
+      # version pinned in the install command below.
+      - name: Cache govulncheck binary
+        if: ${{ inputs.enable_security_scan && inputs.govulncheck_binary != '' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/go/bin/govulncheck
+          key: gotool-govulncheck-${{ runner.os }}-${{ runner.arch }}-v1.6.0
+
       # Build the effective Grype config: the org-wide ignore baseline, plus
       # (for Go binaries) automatic reachability suppression from govulncheck
       # VEX. Fail-safe - any error here leaves a valid empty config so the scan
@@ -200,8 +209,8 @@ jobs:
           if [ -n "${GOVULN_BINARY}" ]; then
             cid="$(docker create "${SCAN_IMAGE}" 2>/dev/null)"
             if [ -n "$cid" ] && docker cp "${cid}:${GOVULN_BINARY}" /tmp/govuln-bin 2>/dev/null; then
-              go install golang.org/x/vuln/cmd/govulncheck@v1.6.0 2>/dev/null
               GVC="$(go env GOPATH)/bin/govulncheck"
+              [ -x "$GVC" ] || go install golang.org/x/vuln/cmd/govulncheck@v1.6.0 2>/dev/null
               if [ -x "$GVC" ] && "$GVC" -mode binary -format openvex /tmp/govuln-bin > ./govulncheck.vex.json 2>/dev/null && [ -s ./govulncheck.vex.json ]; then
                 printf 'vex-documents:\n  - ./govulncheck.vex.json\n' >> ./.grype.yaml
                 echo "Added govulncheck reachability VEX for ${GOVULN_BINARY}"
@@ -372,6 +381,15 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
 
+      # Compiling govulncheck from source takes minutes; the key hardcodes the
+      # version pinned in the install command below.
+      - name: Cache govulncheck binary
+        if: ${{ inputs.enable_security_scan && inputs.govulncheck_binary != '' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/go/bin/govulncheck
+          key: gotool-govulncheck-${{ runner.os }}-${{ runner.arch }}-v1.6.0
+
       # Build the effective Grype config; same logic as the test job. Runs per
       # arch because the arm64 image is a different artifact.
       - name: Prepare Grype policy
@@ -396,8 +414,8 @@ jobs:
           if [ -n "${GOVULN_BINARY}" ]; then
             cid="$(docker create "${SCAN_IMAGE}" 2>/dev/null)"
             if [ -n "$cid" ] && docker cp "${cid}:${GOVULN_BINARY}" /tmp/govuln-bin 2>/dev/null; then
-              go install golang.org/x/vuln/cmd/govulncheck@v1.6.0 2>/dev/null
               GVC="$(go env GOPATH)/bin/govulncheck"
+              [ -x "$GVC" ] || go install golang.org/x/vuln/cmd/govulncheck@v1.6.0 2>/dev/null
               if [ -x "$GVC" ] && "$GVC" -mode binary -format openvex /tmp/govuln-bin > ./govulncheck.vex.json 2>/dev/null && [ -s ./govulncheck.vex.json ]; then
                 printf 'vex-documents:\n  - ./govulncheck.vex.json\n' >> ./.grype.yaml
                 echo "Added govulncheck reachability VEX for ${GOVULN_BINARY}"
