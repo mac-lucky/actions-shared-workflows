@@ -5,9 +5,10 @@
   "postUpdateOptions": ["gomodTidy"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
+  "rebaseWhen": "conflicted",
   "packageRules": [
     {
-      "description": "Automerge safe update types, pre-1.0 minor bumps included. GitHub does the merge itself the moment the required check goes green, so this no longer waits for the next daily Renovate run",
+      "description": "Automerge safe update types, pre-1.0 minor bumps included. Renovate only arms the merge once it sees the branch already green, so rebaseWhen stays off auto: a rebase on every base-branch move restarts CI and burns that day's run",
       "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
       "automerge": true
     },
