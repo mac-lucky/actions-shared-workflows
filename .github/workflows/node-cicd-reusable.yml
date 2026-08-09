@@ -152,10 +152,10 @@ on:
         type: string
         default: 'ubuntu-24.04-arm'
       skip_qemu_setup:
-        description: 'Skip QEMU setup (for self-hosted runners with binfmt pre-configured)'
+        description: 'Skip QEMU setup. Defaults to true because the arm64 legs run on native arm runners; set false only when runner_arm64 is an amd64 machine that emulates.'
         required: false
         type: boolean
-        default: false
+        default: true
       build_fetch_depth:
         description: >-
           Checkout depth for the container build and publish jobs. Defaults to a
