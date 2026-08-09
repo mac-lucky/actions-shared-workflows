@@ -167,6 +167,11 @@ on:
         required: false
         type: string
         default: 'v2.28.0'
+      code_analysis_tools:
+        description: 'JSON array of analysis tools to run, a subset of ["go-vet","staticcheck","govulncheck","gosec"]. Trim it when a parallel golangci-lint workflow already covers vet and staticcheck.'
+        required: false
+        type: string
+        default: '["go-vet", "staticcheck", "govulncheck", "gosec"]'
       
       # Deployment. Tag pushes always publish: the tag may be plain "v<semver>"
       # or prefixed "<name>/v<semver>" (the prefix is stripped before parsing),
@@ -280,22 +285,11 @@ jobs:
     name: Code Analysis (${{ matrix.tool }})
     runs-on: ${{ inputs.runner_default }}
     needs: [check-changes, setup]
-    if: ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true' }}
+    if: ${{ inputs.code_analysis_tools != '[]' && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - tool: go-vet
-            name: Go Vet
-          - tool: staticcheck
-            name: Staticcheck
-            version: ${{ inputs.staticcheck_version }}
-          - tool: govulncheck
-            name: Go Vulnerability Check
-            version: ${{ inputs.govulncheck_version }}
-          - tool: gosec
-            name: Go Security Scanner
-            version: ${{ inputs.gosec_version }}
+        tool: ${{ fromJSON(inputs.code_analysis_tools) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -341,7 +335,7 @@ jobs:
           path: ~/go/bin/${{ matrix.tool }}
           # Keyed on this tool's own version only: one key spanning all three
           # versions meant bumping any tool cold-missed the other two as well.
-          key: gotool-${{ matrix.tool }}-${{ runner.os }}-${{ runner.arch }}-${{ needs.setup.outputs.go-version }}-${{ matrix.version }}
+          key: gotool-${{ matrix.tool }}-${{ runner.os }}-${{ runner.arch }}-${{ needs.setup.outputs.go-version }}-${{ matrix.tool == 'staticcheck' && inputs.staticcheck_version || matrix.tool == 'govulncheck' && inputs.govulncheck_version || inputs.gosec_version }}
 
       - name: Run staticcheck
         if: matrix.tool == 'staticcheck'
