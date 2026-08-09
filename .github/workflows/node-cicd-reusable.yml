@@ -100,6 +100,11 @@ on:
         required: false
         type: boolean
         default: true
+      enable_build_check:
+        description: 'Run the build verification leg of code analysis. Disable when the Docker build already runs the same build command as a hard gate.'
+        required: false
+        type: boolean
+        default: true
 
       # Deployment. Tag pushes (vX.Y.Z) always publish: the image is tagged
       # with the version plus latest, and a GitHub Release with generated notes
@@ -231,11 +236,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - tool: svelte-check
-            name: Svelte Check
-          - tool: build-check
-            name: Build Check
+        tool: ${{ fromJSON(inputs.enable_build_check && '["svelte-check", "build-check"]' || '["svelte-check"]') }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
