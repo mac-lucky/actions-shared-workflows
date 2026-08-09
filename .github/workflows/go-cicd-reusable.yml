@@ -495,8 +495,11 @@ jobs:
   build-container:
     name: Build Container Image
     runs-on: ${{ inputs.runner_default }}
-    needs: [check-changes, setup, code-analysis, go-test]
-    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (needs.go-test.result == 'success' || needs.go-test.result == 'skipped') && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
+    # Runs in parallel with code-analysis and go-test: the image build takes no
+    # input from them, and the publish gate on their results lives in the build
+    # job below. A lint or test failure still reds the run through all-checks.
+    needs: [check-changes, setup]
+    if: ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true' }}
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -706,12 +709,14 @@ jobs:
   build:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    needs: [check-changes, setup, build-container, container-test, kubernetes-test]
+    needs: [check-changes, setup, code-analysis, go-test, build-container, container-test, kubernetes-test]
     # always() switches off the implicit "skip when a dependency failed" rule, so
-    # build-container has to be checked explicitly or a failed image build still
-    # publishes. Publishing is tag-gated; the only other publish path is the
+    # every gate has to be checked explicitly or a failed job still publishes.
+    # code-analysis and go-test are gated here (not via build-container, which
+    # runs in parallel with them); skipped passes because both are opt-out or
+    # event-gated. Publishing is tag-gated; the only other publish path is the
     # opt-in :main dev image.
-    if: ${{ always() && needs.build-container.result == 'success' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || (inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true')) && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
+    if: ${{ always() && needs.build-container.result == 'success' && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (needs.go-test.result == 'success' || needs.go-test.result == 'skipped') && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || (inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch) && needs.check-changes.outputs.code-changed == 'true')) && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') && (inputs.enable_kubernetes_tests == false || needs.kubernetes-test.result == 'success' || needs.kubernetes-test.result == 'skipped') }}
     permissions:
       contents: read
       packages: write

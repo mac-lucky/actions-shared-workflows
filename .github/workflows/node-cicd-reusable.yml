@@ -314,8 +314,11 @@ jobs:
   build-container:
     name: Build Container Image
     runs-on: ${{ inputs.runner_default }}
-    needs: [check-changes, setup, code-analysis]
-    if: ${{ always() && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
+    # Runs in parallel with code-analysis: the image build takes no input from
+    # it, and the publish gate on its result lives in the build job below. An
+    # analysis failure still reds the run through all-checks.
+    needs: [check-changes, setup]
+    if: ${{ github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true' }}
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -426,12 +429,13 @@ jobs:
   build:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    needs: [check-changes, setup, build-container, container-test]
+    needs: [check-changes, setup, code-analysis, build-container, container-test]
     # always() switches off the implicit "skip when a dependency failed" rule, so
-    # build-container has to be checked explicitly - otherwise a failed image build
-    # (or a failed code-analysis, which skips build-container) still publishes.
-    # Publishing is tag-gated.
-    if: ${{ always() && needs.build-container.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') }}
+    # every gate has to be checked explicitly or a failed job still publishes.
+    # code-analysis is gated here (not via build-container, which runs in
+    # parallel with it); skipped passes because the matrix is opt-out and
+    # event-gated. Publishing is tag-gated.
+    if: ${{ always() && needs.build-container.result == 'success' && (needs.code-analysis.result == 'success' || needs.code-analysis.result == 'skipped') && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && (inputs.enable_container_tests == false || needs.container-test.result == 'success' || needs.container-test.result == 'skipped') }}
     permissions:
       contents: read
       packages: write
