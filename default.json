@@ -8,8 +8,15 @@
   "rebaseWhen": "conflicted",
   "packageRules": [
     {
-      "description": "Automerge safe update types, pre-1.0 minor bumps included. Renovate only arms the merge once it sees the branch already green, so rebaseWhen stays off auto: a rebase on every base-branch move restarts CI and burns that day's run",
-      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"],
+      "description": "Automerge safe update types, pre-1.0 minor bumps included, batched into one PR per repo so a day's updates clear in a single green run. Renovate only arms the merge once it sees the branch already green, so rebaseWhen stays off auto: a rebase on every base-branch move restarts CI and burns that day's run",
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "groupName": "all non-major dependencies",
+      "groupSlug": "all-minor-patch",
+      "automerge": true
+    },
+    {
+      "description": "Lockfile refreshes stay in their own PR. Grouped with the rest, one unresolvable peer dependency would block every unrelated bump in the batch",
+      "matchUpdateTypes": ["lockFileMaintenance"],
       "automerge": true
     },
     {
