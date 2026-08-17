@@ -273,9 +273,16 @@ jobs:
       - name: Extract Go version from go.mod
         id: go-version
         run: |
-          # Extract Go version from go.mod
-          GO_VERSION=$(grep "^go " ${{ inputs.go_module_path }}/go.mod | cut -d' ' -f2)
-          echo "Found Go version in go.mod: $GO_VERSION"
+          # Major.minor only, deliberately. govulncheck compares against the
+          # stdlib of the toolchain that built the code, so CI has to sit on the
+          # newest patch of the minor or it reports stdlib CVEs that upstream
+          # already fixed. A go.mod pinning an exact patch (most repos here pin
+          # `go 1.26.5`) would hold setup-go on that patch forever, because a
+          # full version is an exact match and check-latest cannot widen it.
+          # Dropping the patch is what lets check-latest below do its job.
+          GO_MOD_VERSION=$(grep "^go " ${{ inputs.go_module_path }}/go.mod | cut -d' ' -f2)
+          GO_VERSION=$(echo "$GO_MOD_VERSION" | cut -d. -f1,2)
+          echo "Found Go version in go.mod: $GO_MOD_VERSION (resolving as $GO_VERSION)"
 
           # Set version for builds
           echo "version=$GO_VERSION" >> $GITHUB_OUTPUT
@@ -298,6 +305,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ needs.setup.outputs.go-version }}
+          # Without this, setup-go stops at whatever patch the runner image has
+          # cached and never looks for a newer one, so govulncheck fails the
+          # build on stdlib CVEs that are already fixed upstream.
+          check-latest: true
           cache: true
           cache-dependency-path: ${{ inputs.go_module_path }}/go.sum
 
@@ -416,6 +427,10 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ needs.setup.outputs.go-version }}
+          # Without this, setup-go stops at whatever patch the runner image has
+          # cached and never looks for a newer one, so govulncheck fails the
+          # build on stdlib CVEs that are already fixed upstream.
+          check-latest: true
           cache: true
           cache-dependency-path: ${{ inputs.go_module_path }}/go.sum
 
