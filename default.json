@@ -37,6 +37,11 @@
       "description": "svelte-check cannot typecheck under TypeScript 7 yet; lift once the Svelte toolchain supports it",
       "matchPackageNames": ["typescript"],
       "allowedVersions": "<7.0.0"
+    },
+    {
+      "description": "aws/aws-sdk-go-v2 carries ~83k git tags. Renovate's github-tags datasource orders refs by TAG_COMMIT_DATE, which now exceeds GitHub's 10s GraphQL budget at every page size, so the changelog lookup 504s and takes the whole run down with it. Version resolution goes through the go datasource and is unaffected; only release-note fetching has to be skipped",
+      "matchSourceUrls": ["https://github.com/aws/aws-sdk-go-v2"],
+      "fetchChangeLogs": "off"
     }
   ]
 }
