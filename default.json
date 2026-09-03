@@ -1,6 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:best-practices", ":semanticCommits"],
+  "extends": [
+    "config:best-practices",
+    ":semanticCommits",
+    "customManagers:githubActionsVersions"
+  ],
+  "description": "customManagers:githubActionsVersions picks up `# renovate: datasource=... depName=...` above a *_VERSION env in a workflow. The built-in github-actions manager only reads uses:, container images and runs-on, so without it those markers are inert and every pinned CLI in the fleet is frozen until someone edits it by hand.",
   "dependencyDashboard": false,
   "postUpdateOptions": ["gomodTidy"],
   "prConcurrentLimit": 5,
