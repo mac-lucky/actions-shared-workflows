@@ -165,6 +165,9 @@ jobs:
           # same PR, and a full mode=max export per PR crowds the repo's 10 GB
           # cache budget and evicts the branch caches releases restore from.
           cache-to: type=gha,scope=build-linux-amd64,mode=${{ github.event_name == 'pull_request' && 'min' || 'max' }}
+          # This is the image the vulnerability gate scans, so a release must
+          # not build it from cache either (see the build job for the why).
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
 
       # Compiling govulncheck from source takes minutes; the key hardcodes the
       # version pinned in the install command below.
