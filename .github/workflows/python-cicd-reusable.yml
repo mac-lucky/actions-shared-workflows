@@ -716,6 +716,12 @@ jobs:
           tags: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
+          # A release never reuses layers. The `apk upgrade` / `apt-get upgrade`
+          # layer is only as fresh as the build that produced it, and a cache
+          # hit on a tag build shipped last week's packages under a new version
+          # more than once. The fresh layers land in the cache above, so the
+          # push build below still picks them up.
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
 
       # Build the effective Grype config from the org-wide ignore baseline. Fail-safe -
       # any error here leaves a valid empty config so the scan still runs.
