@@ -744,6 +744,17 @@ jobs:
           cat ./.grype.yaml
           exit 0
 
+      # A finding whose package is already on its newest release has nothing to
+      # upgrade to (the advisory names an unreleased fix); waive it instead of
+      # failing. See .github/actions/grype-newest-release/newest-release.sh.
+      - name: Grype newest-release waivers
+        id: waivers
+        if: ${{ inputs.enable_security_scan }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-newest-release@master
+        with:
+          image: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
+          severity-cutoff: ${{ inputs.scan_severity_cutoff }}
+
       # Scan the built image; with fail-build:true a gating finding fails the job so the
       # push step never runs and merge (needs: build) is skipped - nothing is published.
       - name: Container security scan (Grype)
@@ -755,6 +766,7 @@ jobs:
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
           only-fixed: ${{ inputs.scan_only_fixed }}
           fail-build: ${{ inputs.scan_fail_build }}
+          config: ${{ steps.waivers.outputs.config }}
 
       - name: Upload scan SARIF
         continue-on-error: true

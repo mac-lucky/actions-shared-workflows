@@ -233,6 +233,17 @@ jobs:
           cat ./.grype.yaml
           exit 0
 
+      # A finding whose package is already on its newest release has nothing to
+      # upgrade to (the advisory names an unreleased fix); waive it instead of
+      # failing. See .github/actions/grype-newest-release/newest-release.sh.
+      - name: Grype newest-release waivers
+        id: waivers
+        if: ${{ inputs.enable_security_scan }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-newest-release@master
+        with:
+          image: ${{ inputs.app_name }}:test
+          severity-cutoff: ${{ inputs.scan_severity_cutoff }}
+
       - name: Container security scan (Grype)
         id: scan
         if: ${{ inputs.enable_security_scan }}
@@ -242,6 +253,7 @@ jobs:
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
           only-fixed: ${{ inputs.scan_only_fixed }}
           fail-build: ${{ inputs.scan_fail_build }}
+          config: ${{ steps.waivers.outputs.config }}
 
       - name: Upload scan SARIF
         continue-on-error: true
@@ -444,6 +456,17 @@ jobs:
           cat ./.grype.yaml
           exit 0
 
+      # A finding whose package is already on its newest release has nothing to
+      # upgrade to (the advisory names an unreleased fix); waive it instead of
+      # failing. See .github/actions/grype-newest-release/newest-release.sh.
+      - name: Grype newest-release waivers
+        id: waivers
+        if: ${{ inputs.enable_security_scan }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-newest-release@master
+        with:
+          image: ${{ inputs.app_name }}:scan-${{ env.PLATFORM_PAIR }}
+          severity-cutoff: ${{ inputs.scan_severity_cutoff }}
+
       # Scan the built image. With fail-build:true this fails the job on a gating
       # finding, so the push step below never runs and merge (needs: build) is skipped.
       - name: Container security scan (Grype)
@@ -455,6 +478,7 @@ jobs:
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
           only-fixed: ${{ inputs.scan_only_fixed }}
           fail-build: ${{ inputs.scan_fail_build }}
+          config: ${{ steps.waivers.outputs.config }}
 
       - name: Upload scan SARIF
         continue-on-error: true

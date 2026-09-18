@@ -1,0 +1,61 @@
+name: Grype Newest-Release Waivers
+description: >-
+  Pre-scan a local image and waive every finding whose package is already on its
+  newest release (newest-release.sh next to this file). Pass the `config` output to
+  anchore/scan-action's `config` input. Any failure here means no waivers, never
+  a weaker gate.
+
+inputs:
+  image:
+    description: Image to scan, the same value the scan step gets
+    required: true
+  severity-cutoff:
+    description: Lowest severity worth a registry lookup (the scan step's cutoff)
+    required: false
+    default: 'high'
+
+outputs:
+  config:
+    description: Newline-separated grype config files for the scan step
+    value: ${{ steps.waive.outputs.config }}
+
+runs:
+  using: composite
+  steps:
+    # Same pinned action and grype version as the scan step, so the binary and
+    # its DB download are reused there.
+    - name: Install grype
+      id: grype
+      uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+
+    # Files go to RUNNER_TEMP, not the workspace: a later push build with a
+    # `COPY . .` would otherwise pick them up and stop matching the scanned image.
+    - name: Waive findings already on the newest release
+      id: waive
+      shell: bash
+      env:
+        GRYPE: ${{ steps.grype.outputs.cmd }}
+        SCAN_IMAGE: ${{ inputs.image }}
+        CUTOFF: ${{ inputs.severity-cutoff }}
+        SCRIPT: ${{ github.action_path }}/newest-release.sh
+      run: |
+        waivers="$RUNNER_TEMP/grype-waivers.yaml"
+        printf 'ignore: []\n' > "$waivers"
+        # Setting scan-action's config turns off its .grype.yaml auto-detection,
+        # so the policy file the earlier step wrote (if any) is listed explicitly.
+        policy=()
+        [ -f ./.grype.yaml ] && policy=(-c ./.grype.yaml)
+        if "$GRYPE" "$SCAN_IMAGE" "${policy[@]}" --only-fixed -o json > "$RUNNER_TEMP/grype-prescan.json" \
+          && bash "$SCRIPT" "$RUNNER_TEMP/grype-prescan.json" "$CUTOFF" > "$RUNNER_TEMP/grype-waivers.new"; then
+          mv "$RUNNER_TEMP/grype-waivers.new" "$waivers"
+        else
+          echo "::warning::newest-release waiver check failed; scanning without waivers"
+        fi
+        echo "----- waivers -----"
+        cat "$waivers"
+        {
+          echo 'config<<GRYPE_CONFIG_EOF'
+          [ -f ./.grype.yaml ] && echo ./.grype.yaml
+          echo "$waivers"
+          echo 'GRYPE_CONFIG_EOF'
+        } >> "$GITHUB_OUTPUT"
