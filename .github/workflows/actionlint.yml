@@ -9,7 +9,6 @@ on:
     branches: [master]
     paths: ['.github/**', 'security/**']
   pull_request:
-    paths: ['.github/**', 'security/**']
 
 permissions:
   contents: read
