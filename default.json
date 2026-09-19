@@ -7,6 +7,45 @@
   ],
   "description": "customManagers:githubActionsVersions picks up `# renovate: datasource=... depName=...` above a *_VERSION env in a workflow. The built-in github-actions manager only reads uses:, container images and runs-on, so without it those markers are inert and every pinned CLI in the fleet is frozen until someone edits it by hand.",
   "dependencyDashboard": false,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Go analysis tool pins that the reusables on both forges expose as workflow_call input defaults (`<tool>_version:` ... `default: 'vX.Y.Z'`). No other manager reads an input default, so these froze until the go lane moved to a Go release the old golangci-lint and staticcheck could not parse",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "golangci_lint_version:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<currentValue>v[0-9][^\"'\\s]*)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "golangci/golangci-lint"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "staticcheck_version:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<currentValue>v[0-9][^\"'\\s]*)"
+      ],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "honnef.co/go/tools"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "govulncheck_version:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<currentValue>v[0-9][^\"'\\s]*)"
+      ],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "golang.org/x/vuln"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "gosec_version:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<currentValue>v[0-9][^\"'\\s]*)"
+      ],
+      "datasourceTemplate": "go",
+      "depNameTemplate": "github.com/securego/gosec/v2"
+    }
+  ],
   "postUpdateOptions": ["gomodTidy"],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 0,
@@ -35,6 +74,19 @@
       "groupName": "all non-major dependencies",
       "groupSlug": "all-minor-patch",
       "automerge": true
+    },
+    {
+      "description": "The Go analysis tool pins above are defaults every caller inherits the moment they merge, and nothing in this repo's own CI lints a caller with the new version. A linter release that finds new issues would red the whole fleet at once, so these get their own PR and wait for a person to run the new version against the callers first",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": [
+        "golangci/golangci-lint",
+        "honnef.co/go/tools",
+        "golang.org/x/vuln",
+        "github.com/securego/gosec/v2"
+      ],
+      "groupName": "go analysis tools",
+      "groupSlug": "go-analysis-tools",
+      "automerge": false
     },
     {
       "description": "Lockfile refreshes stay in their own PR. Grouped with the rest, one unresolvable peer dependency would block every unrelated bump in the batch",
