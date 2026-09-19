@@ -136,7 +136,7 @@ env:
   # with the go-cicd pins (group `go analysis tools`), and canary.yml runs the
   # binary scan with the new version before that PR can merge.
   # renovate: datasource=go depName=golang.org/x/vuln
-  GOVULNCHECK_VERSION: v1.6.0
+  GOVULNCHECK_VERSION: v1.8.0
 
 jobs:
   # Job 1: Build and test (every event; the PR gate and the release gate)
