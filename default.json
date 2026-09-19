@@ -88,7 +88,7 @@
       "automerge": true
     },
     {
-      "description": "The Go analysis tool pins above are defaults every caller inherits the moment they merge, and nothing in this repo's own CI lints a caller with the new version. A linter release that finds new issues would red the whole fleet at once, so these get their own PR and wait for a person to run the new version against the callers first",
+      "description": "The Go analysis tool pins above are defaults every caller inherits the moment they merge, so they get their own PR instead of riding the batch. Both reusables repos gate it with a required canary check (canary.yml + scripts/canary.sh) that runs the old and the new version over every caller and goes red when the new one fails where the old one passes. Green means no caller breaks, so it automerges; red waits for a person",
       "matchManagers": ["custom.regex"],
       "matchDepNames": [
         "golangci/golangci-lint",
@@ -98,7 +98,7 @@
       ],
       "groupName": "go analysis tools",
       "groupSlug": "go-analysis-tools",
-      "automerge": false
+      "automerge": true
     },
     {
       "description": "Lockfile refreshes stay in their own PR. Grouped with the rest, one unresolvable peer dependency would block every unrelated bump in the batch",
