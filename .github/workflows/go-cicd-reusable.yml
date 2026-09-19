@@ -156,17 +156,17 @@ on:
         description: 'staticcheck version tag to install'
         required: false
         type: string
-        default: 'v0.7.0'
+        default: 'v0.8.1'
       govulncheck_version:
         description: 'govulncheck version tag to install. Pins the binary, not the vulnerability database - that is still fetched at run time, so new CVEs still fail the job.'
         required: false
         type: string
-        default: 'v1.6.0'
+        default: 'v1.8.0'
       gosec_version:
         description: 'gosec version tag to install'
         required: false
         type: string
-        default: 'v2.28.0'
+        default: 'v2.29.0'
       code_analysis_tools:
         description: 'JSON array of analysis tools to run, a subset of ["go-vet","staticcheck","govulncheck","gosec"]. Trim it when a parallel golangci-lint workflow already covers vet and staticcheck.'
         required: false
