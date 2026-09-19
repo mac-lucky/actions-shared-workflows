@@ -1,0 +1,132 @@
+name: Canary
+
+# The reusables pin golangci-lint, staticcheck, govulncheck and gosec as input
+# defaults, and every caller rides @master: a merged bump is what the whole
+# fleet lints with on its next run. A `uses:` ref cannot point at a PR branch,
+# so nothing in a caller can try the new pin first. This workflow does it from
+# here: when a PR changes a pin, each leg checks out one caller and runs the
+# old and the new version over it (scripts/canary.sh). New fails where old
+# passes = regression = red. A PR that touches no pin passes in seconds, so
+# `All checks passed` can be a required check and the Renovate group
+# `go analysis tools` can automerge behind it.
+#
+# The matrix is static on purpose: leg names are status-check contexts.
+# Adding a Go caller to the fleet means adding a leg here, with the tools its
+# workflow actually runs (its code_analysis_tools input, plus golangci-lint if
+# it calls golangci-lint-reusable).
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Ref to diff the pins against (a commit from before a bump re-runs that bump)'
+        required: false
+        type: string
+        default: 'origin/master'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: canary (${{ matrix.caller }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - caller: kubernetes-ping-exporter
+            tools: staticcheck govulncheck gosec
+            modules: .
+          - caller: plausible-exporter
+            tools: staticcheck govulncheck gosec
+            modules: .
+          # ci.yml trims staticcheck, release.yml runs all four legs.
+          - caller: pushward-integrations
+            tools: staticcheck govulncheck gosec golangci-lint
+            modules: backrest bambulab forgejo github grafana relay sabnzbd shared
+          # Also stands in for docker-cicd's govulncheck binary scan.
+          - caller: pushward-mcp
+            tools: staticcheck govulncheck gosec govulncheck-binary
+            modules: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Changed pins for this caller
+        id: pins
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || inputs.base }}
+          TOOLS: ${{ matrix.tools }}
+        run: |
+          scripts/canary.sh pins "$BASE" .github/workflows > /tmp/all-pins
+          : > /tmp/pins
+          while read -r tool old new; do
+            case " $TOOLS " in *" $tool "*) echo "$tool $old $new" >> /tmp/pins ;; esac
+          done < /tmp/all-pins
+          if [ -s /tmp/pins ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            cat /tmp/pins
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No pin this caller uses changed."
+          fi
+
+      # Two callers are private. Without the PAT the checkout 404s and the leg
+      # goes red, which is the point: a skipped caller is an untested one.
+      - name: Checkout caller
+        if: steps.pins.outputs.changed == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: mac-lucky/${{ matrix.caller }}
+          path: caller
+          token: ${{ secrets.CANARY_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      # Same resolution as go-cicd-reusable: the go.mod minor, newest patch.
+      - name: Go version of the caller
+        if: steps.pins.outputs.changed == 'true'
+        id: go
+        env:
+          MODULES: ${{ matrix.modules }}
+        run: |
+          full="$(grep '^go ' "caller/${MODULES%% *}/go.mod" | cut -d' ' -f2)"
+          echo "version=$(echo "$full" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        if: steps.pins.outputs.changed == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          check-latest: true
+          cache: false
+
+      - name: Run old and new over the caller
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          TOOLS: ${{ matrix.tools }}
+          MODULES: ${{ matrix.modules }}
+        run: scripts/canary.sh run caller /tmp/pins
+
+  all-checks:
+    name: All checks passed
+    needs: [canary]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify
+        env:
+          RESULT: ${{ needs.canary.result }}
+        run: |
+          if [ "$RESULT" != "success" ]; then
+            echo "::error::canary result: $RESULT"
+            exit 1
+          fi

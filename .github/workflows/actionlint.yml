@@ -52,11 +52,11 @@ jobs:
 
       # Composite actions that keep their logic in a standalone script (rather
       # than inline in action.yml) get that script checked here, and so do the
-      # security/ scripts the reusables and the Forgejo side run.
+      # security/ scripts the reusables and the Forgejo side run, and scripts/.
       - name: Shellcheck scripts
         run: |
           shopt -s globstar nullglob
-          files=(.github/actions/**/*.sh security/*.sh)
+          files=(.github/actions/**/*.sh security/*.sh scripts/*.sh)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No scripts to check"
             exit 0
