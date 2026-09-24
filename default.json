@@ -69,6 +69,13 @@
       "minimumReleaseAgeBehaviour": "timestamp-optional"
     },
     {
+      "description": "A digest update on a floating tag (latest, alpine, nonroot) has no release to date it, so under timestamp-required it is held forever, again without a word: searxng/searxng:latest and redis:alpine stopped moving the day the cooldown landed. Versioned tags keep the wait. Accepted gap: a floating tag's new digest lands with no wait",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest"],
+      "matchCurrentValue": "!/^v?[0-9]/",
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
+    },
+    {
       "description": "Our own modules and images skip the cooldown: we publish them, so there is no third party to wait out, and a 7-day hold on a shared/ digest or a freshly tagged image only delays our own fixes",
       "matchPackageNames": [
         "github.com/mac-lucky/**",
