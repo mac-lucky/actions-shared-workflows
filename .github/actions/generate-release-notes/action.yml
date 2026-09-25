@@ -10,8 +10,9 @@ inputs:
     required: true
   path_filter:
     description: >-
-      Limit commits to ones touching this path (e.g. ./relay for a monorepo
-      component). Empty means every commit in the range.
+      Limit commits to ones touching these paths, space-separated (e.g.
+      "./relay ./shared" for a monorepo component). Plain paths only, no
+      wildcards. Empty means every commit in the range.
     required: false
     default: ''
   output_file:
@@ -27,6 +28,11 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Install git-cliff
+      id: git-cliff
+      shell: bash
+      run: ${{ github.action_path }}/install-git-cliff.sh
+
     - name: Generate notes
       id: notes
       shell: bash
@@ -34,4 +40,5 @@ runs:
         TAG: ${{ inputs.tag }}
         PATH_FILTER: ${{ inputs.path_filter }}
         OUTPUT_FILE: ${{ inputs.output_file }}
+        GIT_CLIFF: ${{ steps.git-cliff.outputs.path }}
       run: ${{ github.action_path }}/notes.sh

@@ -117,17 +117,44 @@ jobs:
           MODULES: ${{ matrix.modules }}
         run: scripts/canary.sh run caller /tmp/pins
 
+  # The release notes every caller's release job writes: notes.sh and
+  # cliff.toml against a fixture repo with a known expected output, with the
+  # git-cliff pin the action installs. Runs on every PR, pin change or not.
+  release-notes:
+    name: release notes fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install git-cliff
+        id: git-cliff
+        run: .github/actions/generate-release-notes/install-git-cliff.sh
+
+      - name: Run the fixture test
+        env:
+          GIT_CLIFF: ${{ steps.git-cliff.outputs.path }}
+        run: scripts/test-release-notes.sh
+
   all-checks:
     name: All checks passed
-    needs: [canary]
+    needs: [canary, release-notes]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify
         env:
           RESULT: ${{ needs.canary.result }}
+          NOTES_RESULT: ${{ needs.release-notes.result }}
         run: |
           if [ "$RESULT" != "success" ]; then
             echo "::error::canary result: $RESULT"
+            exit 1
+          fi
+          if [ "$NOTES_RESULT" != "success" ]; then
+            echo "::error::release notes fixture result: $NOTES_RESULT"
             exit 1
           fi

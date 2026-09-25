@@ -1,0 +1,80 @@
+# git-cliff config for the section part of release notes. The format is
+# docs/release-notes-style.md. Two callers run it over one PREV..TAG range:
+# notes.sh next to this file, and buildah-build.yml in
+# mac-lucky/forgejo-shared-workflows, which fetches it from master by raw URL.
+# Both pick the previous tag, handle the first-release and empty-range cases,
+# turn the full hashes printed here into `git log --format=%h` abbreviations
+# and add the "Full changelog" line themselves.
+#
+# Commits are classified with the same regexes the shell version used, not
+# with git-cliff's conventional-commit parser: that parser accepts forms the
+# style guide files under Other (uppercase types, a space before the colon)
+# and reads BREAKING CHANGE footers the notes never looked at.
+
+[changelog]
+body = '''
+{#- git log order: newest commit date first, a child before its parent on a
+    tie. The walk below is topological; the stable sort by commit date keeps
+    that order among equal dates. -#}
+{%- set commits = commits | filter(attribute="merge_commit", value=false) | reverse | sort(attribute="committer.timestamp") | reverse -%}
+{%- for title in ["Breaking changes", "Features", "Fixes", "Performance", "Refactoring", "Documentation", "Tests", "Maintenance", "Other"] -%}
+{%- set section = commits | filter(attribute="group", value=title) -%}
+{%- if section | length > 0 -%}
+## {{ title }}
+
+{% for commit in section -%}
+{%- if title == "Other" -%}
+- {{ commit.message }} ({{ commit.id }})
+{% else -%}
+{#- Same cuts as the shell version: the description is everything after the
+    first ": ", the scope sits between the first "(" and the next ")" in the
+    part before the first ":". -#}
+{%- set rest = commit.message | replace_regex(from="^[\s\S]*?: ", to="") -%}
+{%- set typepart = commit.message | replace_regex(from=":[\s\S]*$", to="") -%}
+{%- set scopes = typepart | find_regex(pat="\([^)]*\)") -%}
+{%- set scope = "" -%}
+{%- if scopes | length > 0 -%}
+{%- set scope = scopes | first | replace_regex(from="^\(|\)$", to="") -%}
+{%- endif -%}
+- {% if scope != "" %}{{ scope }}: {% endif %}{{ rest }} ({{ commit.id }})
+{% endif -%}
+{%- endfor %}
+{% endif -%}
+{%- endfor -%}
+'''
+trim = false
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+# The subject as `git log --format=%s` prints it: leading blank lines dropped,
+# the first paragraph kept, each of its lines right-trimmed and joined with a
+# space.
+commit_preprocessors = [
+  { pattern = '^([ \t\r]*\n)+', replace = '' },
+  { pattern = '(?s)\n[ \t\r]*(\n.*)?$', replace = '' },
+  { pattern = '[ \t\r]*\n', replace = ' ' },
+  { pattern = '[ \t\r]+$', replace = '' },
+]
+# First match wins. A "!" before the colon marks a breaking change and wins
+# over the type; the type patterns want the colon right after the type or
+# scope, so a breaking commit lands in one section only.
+commit_parsers = [
+  { message = '^[a-z]+(\([^)]*\))?!: ', group = 'Breaking changes' },
+  { message = '^feat(\([^)]*\))?: ', group = 'Features' },
+  { message = '^fix(\([^)]*\))?: ', group = 'Fixes' },
+  { message = '^perf(\([^)]*\))?: ', group = 'Performance' },
+  { message = '^refactor(\([^)]*\))?: ', group = 'Refactoring' },
+  { message = '^docs(\([^)]*\))?: ', group = 'Documentation' },
+  { message = '^test(\([^)]*\))?: ', group = 'Tests' },
+  { message = '^(chore|build|ci|deps)(\([^)]*\))?: ', group = 'Maintenance' },
+  { message = '', group = 'Other' },
+]
+filter_commits = false
+# The caller passes exactly one range; no tag inside it may split it into
+# releases (monorepo tags of other components, pushward-server's -bN markers).
+tag_pattern = '^$'
+# Topological walk, newest first; the template sorts it by commit date.
+topo_order_commits = true
+sort_commits = 'newest'

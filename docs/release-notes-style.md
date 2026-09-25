@@ -1,8 +1,12 @@
 # Release notes style
 
-Every GitHub Release in the mac-lucky fleet uses this format. The generator is
-`.github/actions/generate-release-notes/notes.sh`; notes written by hand (or by
-an agent asked for custom notes) must be indistinguishable from its output.
+Every GitHub Release in the mac-lucky fleet uses this format, and so does every
+Forgejo release `buildah-build` creates. The generator is
+`.github/actions/generate-release-notes/notes.sh`, which renders the sections
+with git-cliff and the `cliff.toml` next to it; the Forgejo side fetches the
+same file. `scripts/test-release-notes.sh` pins the output on a fixture repo.
+Notes written by hand (or by an agent asked for custom notes) must be
+indistinguishable from the generator's output.
 
 ## Source material
 
