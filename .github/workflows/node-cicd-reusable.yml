@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: './Dockerfile'
+      hadolint:
+        description: 'Lint the Dockerfile with hadolint before the first build; only error-level findings fail'
+        required: false
+        type: boolean
+        default: true
       build_context:
         description: 'Build context path'
         required: false
@@ -336,6 +341,12 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: ${{ inputs.build_fetch_depth }}
+
+      - name: Hadolint
+        if: ${{ inputs.hadolint }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/hadolint@master
+        with:
+          dockerfile: ${{ inputs.dockerfile_path }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4

@@ -1,0 +1,40 @@
+name: Hadolint
+description: >-
+  Lint a Dockerfile with a pinned hadolint release. Only error-level findings
+  fail the step; warnings and info are printed. A .hadolint.yaml in the
+  working directory is picked up as usual.
+
+inputs:
+  dockerfile:
+    description: 'Path to the Dockerfile'
+    required: false
+    default: './Dockerfile'
+
+runs:
+  using: composite
+  steps:
+    # The static release binary, checked against the release's checksums.sha256.
+    # buildah-build.yml in forgejo-shared-workflows installs the same version.
+    - name: Run hadolint
+      shell: bash
+      env:
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        # renovate: datasource=github-releases depName=hadolint/hadolint
+        HADOLINT_VERSION: v2.15.1
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64) arch=x86_64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "::error::no hadolint build for $(uname -m)"; exit 1 ;;
+        esac
+        bin="hadolint-linux-${arch}"
+        dir="${RUNNER_TEMP}/hadolint-${HADOLINT_VERSION}"
+        mkdir -p "$dir"
+        base="https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}"
+        curl -sSfLo "${dir}/${bin}" "${base}/${bin}"
+        curl -sSfLo "${dir}/checksums.sha256" "${base}/checksums.sha256"
+        (cd "$dir" && grep " \*${bin}\$" checksums.sha256 | sha256sum -c -)
+        chmod +x "${dir}/${bin}"
+        "${dir}/${bin}" --version
+        "${dir}/${bin}" --failure-threshold error "$DOCKERFILE"
