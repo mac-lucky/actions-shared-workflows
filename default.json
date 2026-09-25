@@ -63,16 +63,8 @@
       "minimumReleaseAge": "7 days"
     },
     {
-      "description": "GHCR serves no release timestamps, so the cooldown cannot be measured there, and under Renovate 42+'s timestamp-required default every GHCR update would be held forever without a word (the dependency dashboard is off). Accepted gap: GHCR images update with no wait",
+      "description": "Docker updates Renovate cannot date would otherwise be held forever without a word (the dependency dashboard is off) under Renovate 42+'s timestamp-required default: everything on GHCR, which serves no timestamps, and every digest update on a floating tag (latest, alpine, nonroot), which has no release to date. timestamp-optional only drops the requirement: an update that has a timestamp still waits the full cooldown. Accepted gap: undated docker updates land with no wait",
       "matchDatasources": ["docker"],
-      "matchPackageNames": ["ghcr.io/**"],
-      "minimumReleaseAgeBehaviour": "timestamp-optional"
-    },
-    {
-      "description": "A digest update on a floating tag (latest, alpine, nonroot) has no release to date it, so under timestamp-required it is held forever, again without a word: searxng/searxng:latest and redis:alpine stopped moving the day the cooldown landed. Versioned tags keep the wait. Accepted gap: a floating tag's new digest lands with no wait",
-      "matchDatasources": ["docker"],
-      "matchUpdateTypes": ["digest"],
-      "matchCurrentValue": "!/^v?[0-9]/",
       "minimumReleaseAgeBehaviour": "timestamp-optional"
     },
     {
