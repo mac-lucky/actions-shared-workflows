@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Cache actionlint
         id: cache-actionlint
@@ -50,6 +52,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # Composite actions that keep their logic in a standalone script (rather
       # than inline in action.yml) get that script checked here, and so do the
@@ -65,3 +69,23 @@ jobs:
           # -S warning: info-level advisories (e.g. SC2153 on env-provided
           # variables) do not fail the gate.
           shellcheck -S warning "${files[@]}"
+
+  # Workflow security lint (template injection, credential persistence,
+  # excessive permissions, unpinned actions). Offline: the online audits
+  # would look up every action ref on the GitHub API. The policy lives in
+  # .github/zizmor.yml; an intended finding carries an inline
+  # `# zizmor: ignore[...]` comment with its reason.
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    env:
+      # renovate: datasource=pypi depName=zizmor
+      ZIZMOR_VERSION: 1.30.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        run: pipx run "zizmor==${ZIZMOR_VERSION}" --offline --no-progress .

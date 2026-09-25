@@ -25,6 +25,7 @@ runs:
   using: composite
   steps:
     - name: Check for code changes
+      # zizmor: ignore[template-injection] inputs come from the calling workflow
       id: changes
       shell: bash
       run: |

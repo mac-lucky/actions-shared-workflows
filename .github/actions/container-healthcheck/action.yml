@@ -29,12 +29,14 @@ runs:
   using: composite
   steps:
     - name: Load container image
+      # zizmor: ignore[template-injection] inputs come from the calling workflow
       shell: bash
       run: |
         gunzip -c ${{ inputs.image_tar }} | docker load
         docker image ls -a
 
     - name: Run pre-test setup
+      # zizmor: ignore[template-injection] a script input, run as shell by design
       if: ${{ inputs.pre_test_script != '' }}
       shell: bash
       run: |
@@ -42,6 +44,7 @@ runs:
         ${{ inputs.pre_test_script }}
 
     - name: Basic container functionality test
+      # zizmor: ignore[template-injection] script inputs run as shell by design; the rest are caller inputs
       shell: bash
       run: |
         echo "Running basic container test for ${{ inputs.container_name }}"

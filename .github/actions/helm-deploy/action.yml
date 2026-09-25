@@ -26,6 +26,7 @@ runs:
         version: 'latest'
 
     - name: Deploy application with Helm
+      # zizmor: ignore[template-injection] inputs come from the calling workflow
       shell: bash
       run: |
         helm upgrade --install ${{ inputs.release_name }} ${{ inputs.chart_path }} \

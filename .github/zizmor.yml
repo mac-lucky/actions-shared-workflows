@@ -1,0 +1,10 @@
+# zizmor settings, read by the zizmor job in actionlint.yml and by the fleet's
+# weekly workflow sweep. Findings that are intended stay visible as inline
+# `# zizmor: ignore[...]` comments on the step they cover.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # The reusables call this repo's own actions at @master on purpose:
+        # a push to master is the fleet deploy.
+        mac-lucky/*: any

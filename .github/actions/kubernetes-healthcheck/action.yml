@@ -14,12 +14,14 @@ runs:
   using: composite
   steps:
     - name: Wait for pods to be ready
+      # zizmor: ignore[template-injection] inputs come from the calling workflow
       shell: bash
       run: |
         kubectl wait --for=condition=ready pod -l app=${{ inputs.app_label_selector }} \
           -n monitoring --timeout=120s
 
     - name: Health check
+      # zizmor: ignore[template-injection] inputs come from the calling workflow
       shell: bash
       run: |
         echo "=== Health check ==="

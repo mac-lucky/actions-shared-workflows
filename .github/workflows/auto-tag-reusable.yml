@@ -54,6 +54,7 @@ jobs:
           fi
 
       - name: Checkout code
+        # zizmor: ignore[artipacked] the tag push below authenticates with this persisted PAT
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0

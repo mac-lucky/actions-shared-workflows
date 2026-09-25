@@ -27,6 +27,7 @@ runs:
         password: ${{ inputs.github_token }}
 
     - name: Verify image pull and functionality
+      # zizmor: ignore[template-injection] inputs come from the calling workflow
       shell: bash
       run: |
         echo "Verifying ${{ inputs.registry_image }}:${{ inputs.tag }} can be pulled from GHCR..."

@@ -48,8 +48,11 @@ jobs:
       modules: ${{ steps.resolve.outputs.modules }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Resolve Go version and modules
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         id: resolve
         run: |
           set -euo pipefail
@@ -91,6 +94,8 @@ jobs:
         module: ${{ fromJSON(needs.discover.outputs.modules) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:

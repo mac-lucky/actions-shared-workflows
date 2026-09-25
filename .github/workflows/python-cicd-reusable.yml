@@ -188,6 +188,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           # The change check diffs the tip commit against its parent only.
           fetch-depth: 2
 
@@ -208,8 +209,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Extract Python version
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         id: python-version
         run: |
           # Try to extract from Dockerfile first
@@ -254,6 +258,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install uv
         if: ${{ inputs.use_uv && (matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format' || matrix.tool == 'bandit') }}
@@ -363,6 +369,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install uv
         if: ${{ inputs.use_uv }}
@@ -434,6 +442,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -459,6 +469,7 @@ jobs:
             PYTHON_VERSION=${{ needs.setup.outputs.python-version }}
 
       - name: Save container image
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ inputs.enable_kubernetes_tests || inputs.enable_container_tests }}
         run: |
           docker save ${{ inputs.app_name }}:test | \
@@ -486,6 +497,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -512,6 +525,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Download container artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -535,6 +550,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Download container artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -543,6 +560,7 @@ jobs:
           path: /tmp
 
       - name: Load container image
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         run: |
           gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
           docker image ls -a
@@ -551,6 +569,7 @@ jobs:
         uses: mac-lucky/actions-shared-workflows/.github/actions/setup-minikube@master
 
       - name: Load Docker image into Minikube
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         run: |
           minikube image load ${{ inputs.app_name }}:test
 
@@ -567,6 +586,7 @@ jobs:
           app_label_selector: ${{ inputs.app_label_selector != '' && inputs.app_label_selector || inputs.app_name }}
 
       - name: Check logs
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         run: |
           APP_LABEL="${{ inputs.app_label_selector }}"
           if [ -z "$APP_LABEL" ]; then
@@ -578,6 +598,7 @@ jobs:
           kubectl logs -l app=$APP_LABEL -n monitoring --tail=50
 
       - name: Test metrics endpoint
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ inputs.enable_custom_metrics_test }}
         run: |
           RELEASE_NAME="${{ inputs.helm_release_name }}"
@@ -608,6 +629,7 @@ jobs:
           kill $PF_PID || true
 
       - name: Cleanup
+        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: always()
         run: |
           RELEASE_NAME="${{ inputs.helm_release_name }}"
@@ -652,6 +674,8 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -794,6 +818,7 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
 
       - name: Export digest
+        # zizmor: ignore[template-injection] values computed earlier in this run
         run: |
           mkdir -p ${{ runner.temp }}/digests
           digest="${{ steps.build.outputs.digest }}"
@@ -830,6 +855,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Prepare version
+        # zizmor: ignore[template-injection] values computed earlier in this run
         run: |
           echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> $GITHUB_ENV
 
@@ -858,12 +884,14 @@ jobs:
           password: ${{ github.token }}
 
       - name: Create manifest list and push (GHCR)
+        # zizmor: ignore[template-injection] values computed earlier in this run
         working-directory: ${{ runner.temp }}/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
 
       - name: Create manifest list and push (Docker Hub)
+        # zizmor: ignore[template-injection] values computed earlier in this run
         if: ${{ inputs.push_to_dockerhub }}
         working-directory: ${{ runner.temp }}/digests
         run: |
@@ -879,6 +907,7 @@ jobs:
             $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
 
       - name: Inspect image
+        # zizmor: ignore[template-injection] values computed earlier in this run
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
 
@@ -925,6 +954,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Download SBOM artifact
