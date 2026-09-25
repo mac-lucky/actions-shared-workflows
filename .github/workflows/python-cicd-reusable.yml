@@ -141,7 +141,7 @@ on:
         description: 'Ruff version to lint and format-check with'
         required: false
         type: string
-        default: '0.16.1'
+        default: '0.16.8'
       bandit_version:
         description: 'Bandit version for the advisory security scan'
         required: false
