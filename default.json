@@ -3,9 +3,10 @@
   "extends": [
     "config:best-practices",
     ":semanticCommits",
-    "customManagers:githubActionsVersions"
+    "customManagers:githubActionsVersions",
+    "customManagers:dockerfileVersions"
   ],
-  "description": "customManagers:githubActionsVersions picks up `# renovate: datasource=... depName=...` above a *_VERSION env in a workflow. The built-in github-actions manager only reads uses:, container images and runs-on, so without it those markers are inert and every pinned CLI in the fleet is frozen until someone edits it by hand.",
+  "description": "customManagers:githubActionsVersions and customManagers:dockerfileVersions pick up `# renovate: datasource=... depName=...` above a *_VERSION env in a workflow, or above an ARG/ENV *_VERSION in a Dockerfile. The built-in managers only read uses:, container images, runs-on and FROM, so without them those markers are inert and every pinned CLI in the fleet is frozen until someone edits it by hand.",
   "dependencyDashboard": false,
   "customManagers": [
     {
@@ -44,6 +45,63 @@
       ],
       "datasourceTemplate": "go",
       "depNameTemplate": "github.com/securego/gosec/v2"
+    },
+    {
+      "customType": "regex",
+      "description": "Python tool pins that the python-cicd reusables on both forges expose as input defaults, same shape as the Go tools above. python_image is the Forgejo job container",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "ruff_version:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<currentValue>[0-9][^\"'\\s]*)"
+      ],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "ruff"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "bandit_version:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<currentValue>[0-9][^\"'\\s]*)"
+      ],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "bandit"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "python_image:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<depName>[a-z0-9./-]+/python):(?<currentValue>[^\"'\\s@]+)"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "ARG GO_VERSION feeding FROM golang:${GO_VERSION}-alpine. The dockerfile manager resolves the base image digest but never the interpolated Go version, so each repo's toolchain stayed put until a stale Go stdlib failed the Grype release gate",
+      "managerFilePatterns": ["/(^|/)[Dd]ockerfile[^/]*$/"],
+      "matchStrings": [
+        "ARG GO_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s"
+      ],
+      "datasourceTemplate": "golang-version",
+      "depNameTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "description": "Same ARG in its floating major.minor form (golang:1.26-alpine keeps taking patch releases). golang-version only knows full versions, so the golang image tags are the lookup, which keeps the value floating",
+      "managerFilePatterns": ["/(^|/)[Dd]ockerfile[^/]*$/"],
+      "matchStrings": [
+        "ARG GO_VERSION=(?<currentValue>[0-9]+\\.[0-9]+)\\s"
+      ],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "golang"
+    },
+    {
+      "customType": "regex",
+      "description": "Swift packages declared in an XcodeGen project.yml. The swift manager only reads Package.swift, and the generated xcodeproj with its Package.resolved is gitignored, so nothing else reads these pins",
+      "managerFilePatterns": ["/(^|/)project\\.ya?ml$/"],
+      "matchStrings": [
+        "url: [\"']?https://github\\.com/(?<depName>[^/\\s\"']+/[^/\\s\"']+?)(?:\\.git)?[\"']?\\n[ ]+(?:from|exactVersion|majorVersion|minorVersion): [\"']?(?<currentValue>[0-9][^\"'\\s]*)"
+      ],
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v?(?<version>.*)$"
     }
   ],
   "postUpdateOptions": ["gomodTidy"],
@@ -100,12 +158,36 @@
       "automerge": true
     },
     {
+      "description": "ruff decides what clean means for every python caller (its default rule set grows between releases) and no canary covers them, so the python tool pins get their own PR and wait for a person to re-run ruff over the callers. bandit and the job image ride along",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": [
+        ".github/workflows/python-cicd-reusable.yml",
+        ".forgejo/workflows/python-cicd-reusable.yml"
+      ],
+      "matchDepNames": ["ruff", "bandit", "docker.io/library/python"],
+      "groupName": "python analysis tools",
+      "groupSlug": "python-analysis-tools",
+      "automerge": false
+    },
+    {
+      "description": "A docker tag captured by a regex manager has no digest group next to it, so a pinDigest update has nowhere to write and only produces an empty branch",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["docker"],
+      "pinDigests": false
+    },
+    {
+      "description": "The .config/ scaffold of a Grafana plugin is generated by @grafana/create-plugin and rewritten by its update command; its dev-only Go pin moves with the scaffold",
+      "matchFileNames": [".config/Dockerfile"],
+      "matchDepNames": ["go"],
+      "enabled": false
+    },
+    {
       "description": "Lockfile refreshes stay in their own PR. Grouped with the rest, one unresolvable peer dependency would block every unrelated bump in the batch",
       "matchUpdateTypes": ["lockFileMaintenance"],
       "automerge": true
     },
     {
-      "description": "Majors stay manual and get flagged; the Dependency Dashboard issue lists them per repo",
+      "description": "Majors stay manual and get the major label. The dependency dashboard is off, so the open PRs are the only list: search both forges for that label",
       "matchUpdateTypes": ["major"],
       "labels": ["major"]
     },
