@@ -1,18 +1,20 @@
 # Release notes style
 
-Every GitHub Release in the mac-lucky fleet uses this format, and so does every
-Forgejo release `buildah-build` creates. The generator is
+Every GitHub Release in the mac-lucky fleet uses this format. The generator is
 `.github/actions/generate-release-notes/notes.sh`, which renders the sections
-with git-cliff and the `cliff.toml` next to it; the Forgejo side fetches the
-same file. `scripts/test-release-notes.sh` pins the output on a fixture repo.
-Notes written by hand (or by an agent asked for custom notes) must be
-indistinguishable from the generator's output.
+with git-cliff and the `cliff.toml` next to it; `scripts/test-release-notes.sh`
+pins the output on a fixture repo. Notes written by hand (or by an agent asked
+for custom notes) must be indistinguishable from the generator's output.
+Forgejo releases differ in a few points, listed at the end.
 
 ## Source material
 
 Notes are built from the commits between the previous tag and the released tag,
-merge commits excluded. The previous tag is the newest tag with the same prefix
-(`v1.2.2` for `v1.2.3`; `relay/v1.0.0` for `relay/v1.0.1`). For monorepo
+merge commits excluded. The previous tag is the nearest ancestor of the
+released commit that carries a tag with the same prefix (`v1.2.2` for
+`v1.2.3`; `relay/v1.0.0` for `relay/v1.0.1`), not the highest version: a
+legacy tag numbered above the release line is never picked. Only when no such
+ancestor exists does the highest-sorting same-prefix tag stand in. For monorepo
 components, only commits touching the component's path are included.
 
 Commits follow `type(scope): description` (scope optional). The type decides
@@ -64,3 +66,15 @@ the section; a `!` before the colon marks a breaking change.
 
 Full changelog: https://github.com/mac-lucky/example/compare/v1.1.0...v1.2.0
 ```
+
+## Forgejo releases
+
+`buildah-build` in forgejo-shared-workflows fetches the same `cliff.toml` from
+master, so the sections are identical. What differs:
+
+- Links point at the forge: `Full changelog: <forgejo url>/<owner>/<repo>/compare/<prev>...<tag>`,
+  and a first release links to `/commits/tag/<tag>` instead of `/commits/<tag>`.
+- Plain `v*` tags only, with no path filter.
+- If git-cliff or `cliff.toml` cannot be fetched, the sections are replaced by
+  `Release notes could not be generated for this build.`, followed by the
+  changelog link. The image push goes ahead either way.

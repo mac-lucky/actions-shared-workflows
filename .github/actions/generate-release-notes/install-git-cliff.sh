@@ -19,8 +19,10 @@ base="https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}
 dir="${RUNNER_TEMP:?}/git-cliff"
 mkdir -p "$dir"
 cd "$dir"
-curl -sSfLO "${base}/${asset}"
-curl -sSfLO "${base}/${asset}.sha512"
+# Retries: the release job runs after the images are published, and a
+# transient github.com error here would fail it with nothing left to redo.
+curl -sSfLO --retry 3 --retry-all-errors --connect-timeout 10 --max-time 120 "${base}/${asset}"
+curl -sSfLO --retry 3 --retry-all-errors --connect-timeout 10 --max-time 120 "${base}/${asset}.sha512"
 sha512sum -c "${asset}.sha512"
 tar -xzf "$asset" --strip-components=1 "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
 ./git-cliff --version

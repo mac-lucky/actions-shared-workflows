@@ -37,4 +37,5 @@ runs:
         (cd "$dir" && grep " \*${bin}\$" checksums.sha256 | sha256sum -c -)
         chmod +x "${dir}/${bin}"
         "${dir}/${bin}" --version
+        [ -f "$DOCKERFILE" ] || { echo "::error::Dockerfile not found: $DOCKERFILE"; exit 1; }
         "${dir}/${bin}" --failure-threshold error "$DOCKERFILE"
