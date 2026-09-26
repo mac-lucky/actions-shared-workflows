@@ -5,14 +5,20 @@
 # range, handles the first-release and empty-range cases and adds the
 # changelog link. Needs a full-history checkout (fetch-depth: 0); a shallow
 # clone cannot see the previous tag.
+#
+# Env: TAG (required), PATH_FILTER, OUTPUT_FILE, GIT_CLIFF, CLIFF_CONFIG, and
+# for the changelog link CHANGELOG_BASE_URL (default
+# https://github.com/$GITHUB_REPOSITORY; no link when neither is set) and
+# FIRST_RELEASE_PATH (default `commits`; Forgejo's tag view is `commits/tag`).
 set -euo pipefail
 
 TAG="${TAG:?TAG is required}"
 PATH_FILTER="${PATH_FILTER:-}"
 OUTPUT_FILE="${OUTPUT_FILE:-release-notes.md}"
-REPO="${GITHUB_REPOSITORY:-}"
 GIT_CLIFF="${GIT_CLIFF:-git-cliff}"
 CLIFF_CONFIG="${CLIFF_CONFIG:-$(dirname "${BASH_SOURCE[0]}")/cliff.toml}"
+BASE_URL="${CHANGELOG_BASE_URL:-${GITHUB_REPOSITORY:+https://github.com/$GITHUB_REPOSITORY}}"
+FIRST_RELEASE_PATH="${FIRST_RELEASE_PATH:-commits}"
 
 # Tags are plain (v1.2.3) or prefixed (relay/v1.2.3). The previous tag is the
 # nearest same-prefix ancestor of the released commit - NOT the highest-sorting
@@ -33,14 +39,19 @@ fi
   echo "previous_tag=${PREV}"
 } >> "${GITHUB_OUTPUT:-/dev/null}"
 
+# The last line, after a blank one: `changelog <path below the repo URL>`.
+changelog() {
+  if [ -n "$BASE_URL" ]; then
+    printf '\nFull changelog: %s/%s\n' "${BASE_URL%/}" "$1" >> "$OUTPUT_FILE"
+  fi
+}
+
 : > "$OUTPUT_FILE"
 
 # First release: listing the entire history helps nobody.
 if [ -z "$PREV" ]; then
   echo "Initial release." >> "$OUTPUT_FILE"
-  if [ -n "$REPO" ]; then
-    printf '\nFull changelog: https://github.com/%s/commits/%s\n' "$REPO" "$TAG" >> "$OUTPUT_FILE"
-  fi
+  changelog "${FIRST_RELEASE_PATH}/${TAG}"
   exit 0
 fi
 
@@ -66,22 +77,15 @@ if [ -n "$PATH_FILTER" ]; then
 fi
 
 # git-cliff prints full hashes; the notes show git log's %h abbreviation.
-ABBREV_SED=$(mktemp)
-trap 'rm -f "$ABBREV_SED"' EXIT
-git log --format='s/(%H)$/(%h)/' "${PREV}..${TAG}" > "$ABBREV_SED"
-SECTIONS=$("$GIT_CLIFF" --no-exec --config "$CLIFF_CONFIG" ${include[@]+"${include[@]}"} "${PREV}..${TAG}" | sed -f "$ABBREV_SED")
+SECTIONS=$("$GIT_CLIFF" --no-exec --config "$CLIFF_CONFIG" ${include[@]+"${include[@]}"} "${PREV}..${TAG}" \
+  | sed -f <(git log --format='s/(%H)$/(%h)/' "${PREV}..${TAG}"))
 
 if [ -z "$SECTIONS" ]; then
   echo "Maintenance rebuild; no source changes since ${PREV}." >> "$OUTPUT_FILE"
-  if [ -n "$REPO" ]; then
-    printf '\nFull changelog: https://github.com/%s/compare/%s...%s\n' "$REPO" "$PREV" "$TAG" >> "$OUTPUT_FILE"
-  fi
-  exit 0
+else
+  printf '%s\n' "$SECTIONS" >> "$OUTPUT_FILE"
 fi
-
-# Each section ends with a blank line, so the link follows one.
-printf '%s\n\n' "$SECTIONS" >> "$OUTPUT_FILE"
-printf 'Full changelog: https://github.com/%s/compare/%s...%s\n' "$REPO" "$PREV" "$TAG" >> "$OUTPUT_FILE"
+changelog "compare/${PREV}...${TAG}"
 
 echo "Notes for ${TAG} (since ${PREV}):"
 cat "$OUTPUT_FILE"

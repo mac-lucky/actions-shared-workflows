@@ -168,7 +168,7 @@
       "automerge": false
     },
     {
-      "description": "Lint and release-note tools the fleet's gates run: zizmor (both reusables repos and forgejo-fleet-ops), hadolint (both reusables repos), git-cliff (release notes on both forges), kube-score (Kubernetes) and tflint (infra-ci). A new release can add rules that turn every caller red at once, or change what the release notes say, so the pins get their own PR and wait for a person",
+      "description": "Lint and release-note tools the fleet's gates run: zizmor (both reusables repos and forgejo-fleet-ops), hadolint and git-cliff (one script each here, which the Forgejo jobs fetch, so one pin serves both forges), kube-score (Kubernetes) and tflint (infra-ci). A new release can add rules that turn every caller red at once, or change what the release notes say, so the pins get their own PR and wait for a person",
       "matchPackageNames": [
         "zizmor",
         "hadolint/hadolint",

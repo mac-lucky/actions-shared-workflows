@@ -40,10 +40,16 @@ tag() {
   git tag -a "$1" -m "$1"
 }
 
+# check <name> <tag> <path filter> <expected>. The link settings come from
+# base_url and first_path; empty means notes.sh's GitHub defaults.
 fail=0
+base_url=""
+first_path=""
 check() {
   local name=$1 tag=$2 filter=$3 expected=$4 actual
-  actual=$(TAG="$tag" PATH_FILTER="$filter" OUTPUT_FILE="$work/notes.md" bash "$notes" > /dev/null && cat "$work/notes.md"; echo x)
+  actual=$(TAG="$tag" PATH_FILTER="$filter" OUTPUT_FILE="$work/notes.md" \
+    CHANGELOG_BASE_URL="$base_url" FIRST_RELEASE_PATH="$first_path" \
+    bash "$notes" > /dev/null && cat "$work/notes.md"; echo x)
   actual=${actual%x}
   if [ "$actual" == "$expected" ]; then
     echo "ok   $name"
@@ -64,6 +70,16 @@ check "first release" v1.0.0 "" "Initial release.
 
 Full changelog: https://github.com/mac-lucky/fixture/commits/v1.0.0
 "
+
+# How buildah-build calls it on Forgejo: the forge's URL, its tag view.
+base_url=https://git.example.com/mac-lucky/fixture/
+first_path=commits/tag
+check "first release, Forgejo links" v1.0.0 "" "Initial release.
+
+Full changelog: https://git.example.com/mac-lucky/fixture/commits/tag/v1.0.0
+"
+base_url=""
+first_path=""
 
 commit api/a.go "feat(api): add webhook retries"
 commit api/b.go "feat: support \$HOME and \`backticks\` in paths"
@@ -183,6 +199,15 @@ check "nothing in range" relay/v1.1.1 "./relay ./shared" "Maintenance rebuild; n
 
 Full changelog: https://github.com/mac-lucky/fixture/compare/relay/v1.1.0...relay/v1.1.1
 "
+
+base_url=https://git.example.com/mac-lucky/fixture
+first_path=commits/tag
+check "nothing in range, Forgejo links" relay/v1.1.1 "./relay ./shared" "Maintenance rebuild; no source changes since relay/v1.1.0.
+
+Full changelog: https://git.example.com/mac-lucky/fixture/compare/relay/v1.1.0...relay/v1.1.1
+"
+base_url=""
+first_path=""
 
 # A glob would mean something else to git-cliff than to git log.
 if TAG=relay/v1.1.0 PATH_FILTER="./relay/*.go" OUTPUT_FILE="$work/notes.md" bash "$notes" > /dev/null 2>&1; then

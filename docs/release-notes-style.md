@@ -5,7 +5,8 @@ Every GitHub Release in the mac-lucky fleet uses this format. The generator is
 with git-cliff and the `cliff.toml` next to it; `scripts/test-release-notes.sh`
 pins the output on a fixture repo. Notes written by hand (or by an agent asked
 for custom notes) must be indistinguishable from the generator's output.
-Forgejo releases differ in a few points, listed at the end.
+Forgejo releases come from the same generator; the end of this file says what
+differs there.
 
 ## Source material
 
@@ -69,12 +70,9 @@ Full changelog: https://github.com/mac-lucky/example/compare/v1.1.0...v1.2.0
 
 ## Forgejo releases
 
-`buildah-build` in forgejo-shared-workflows fetches the same `cliff.toml` from
-master, so the sections are identical. What differs:
-
-- Links point at the forge: `Full changelog: <forgejo url>/<owner>/<repo>/compare/<prev>...<tag>`,
-  and a first release links to `/commits/tag/<tag>` instead of `/commits/<tag>`.
-- Plain `v*` tags only, with no path filter.
-- If git-cliff or `cliff.toml` cannot be fetched, the sections are replaced by
-  `Release notes could not be generated for this build.`, followed by the
-  changelog link. The image push goes ahead either way.
+`buildah-build` in forgejo-shared-workflows runs the same `notes.sh` and
+`cliff.toml`, fetched from master. Only the links differ: they point at the
+forge, and a first release links to `/commits/tag/<tag>`. When the scripts
+cannot be fetched or fail, the body is
+`Release notes could not be generated for this build.` followed by that
+`/commits/tag/<tag>` link, and the image push goes ahead.
