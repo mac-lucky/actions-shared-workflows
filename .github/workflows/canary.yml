@@ -145,16 +145,16 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      # Every job in needs has to succeed; a new job only has to be added there.
       - name: Verify
         env:
-          RESULT: ${{ needs.canary.result }}
-          NOTES_RESULT: ${{ needs.release-notes.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          if [ "$RESULT" != "success" ]; then
-            echo "::error::canary result: $RESULT"
-            exit 1
-          fi
-          if [ "$NOTES_RESULT" != "success" ]; then
-            echo "::error::release notes fixture result: $NOTES_RESULT"
-            exit 1
-          fi
+          echo "results: $RESULTS"
+          [ -n "$RESULTS" ] || { echo "::error::no job results"; exit 1; }
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a required job ended with: $result"
+              exit 1
+            fi
+          done
