@@ -17,7 +17,7 @@ cd "$dir"
 # Retries: the release job runs after the images are published, and a
 # transient github.com error here would fail it with nothing left to redo.
 for file in "$asset" "$asset.sha512"; do
-  curl -sSfLO --retry 3 --retry-all-errors --connect-timeout 10 --max-time 120 "${base}/${file}"
+  curl -sSfLO --retry 3 --retry-all-errors --retry-max-time 60 --connect-timeout 10 --max-time 120 "${base}/${file}"
 done
 sha512sum -c "${asset}.sha512"
 tar -xzf "$asset" --strip-components=1 "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"

@@ -26,7 +26,7 @@ dir="${RUNNER_TEMP:-/tmp}/hadolint"
 base="https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}"
 mkdir -p "$dir"
 for file in "$bin" checksums.sha256; do
-  curl -sSfL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 120 -o "$dir/$file" "$base/$file"
+  curl -sSfL --retry 3 --retry-all-errors --retry-max-time 60 --connect-timeout 10 --max-time 120 -o "$dir/$file" "$base/$file"
 done
 (cd "$dir" && grep " \*${bin}\$" checksums.sha256 | sha256sum -c -)
 chmod +x "$dir/$bin"
