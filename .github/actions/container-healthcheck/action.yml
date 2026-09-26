@@ -29,14 +29,15 @@ runs:
   using: composite
   steps:
     - name: Load container image
-      # zizmor: ignore[template-injection] inputs come from the calling workflow
+      env:
+        IMAGE_TAR: ${{ inputs.image_tar }}
       shell: bash
       run: |
-        gunzip -c ${{ inputs.image_tar }} | docker load
+        gunzip -c ${IMAGE_TAR} | docker load
         docker image ls -a
 
     - name: Run pre-test setup
-      # zizmor: ignore[template-injection] a script input, run as shell by design
+      # zizmor: ignore[template-injection] pre_test_script is shell by design
       if: ${{ inputs.pre_test_script != '' }}
       shell: bash
       run: |
@@ -44,20 +45,23 @@ runs:
         ${{ inputs.pre_test_script }}
 
     - name: Basic container functionality test
-      # zizmor: ignore[template-injection] script inputs run as shell by design; the rest are caller inputs
+      # zizmor: ignore[template-injection] docker_run_args is shell by design
+      env:
+        CONTAINER_NAME: ${{ inputs.container_name }}
+        HEALTH_CHECK_URL: ${{ inputs.health_check_url }}
       shell: bash
       run: |
-        echo "Running basic container test for ${{ inputs.container_name }}"
-        docker run -d --name test-container ${{ inputs.docker_run_args }} ${{ inputs.container_name }}:test
+        echo "Running basic container test for ${CONTAINER_NAME}"
+        docker run -d --name test-container ${{ inputs.docker_run_args }} ${CONTAINER_NAME}:test
         sleep 10
 
-        if [ -n "${{ inputs.health_check_url }}" ]; then
+        if [ -n "${HEALTH_CHECK_URL}" ]; then
           # HTTP health check
-          echo "Checking health endpoint: ${{ inputs.health_check_url }}"
+          echo "Checking health endpoint: ${HEALTH_CHECK_URL}"
           for i in $(seq 1 30); do
-            if curl -sf "${{ inputs.health_check_url }}" > /dev/null 2>&1; then
+            if curl -sf "${HEALTH_CHECK_URL}" > /dev/null 2>&1; then
               echo "✅ Health check passed"
-              curl -s "${{ inputs.health_check_url }}"
+              curl -s "${HEALTH_CHECK_URL}"
               break
             fi
             if [ "$i" -eq 30 ]; then

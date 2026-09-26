@@ -279,8 +279,9 @@ jobs:
           persist-credentials: false
 
       - name: Extract Go version from go.mod
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         id: go-version
+        env:
+          GO_MODULE_PATH: ${{ inputs.go_module_path }}
         run: |
           # Major.minor only, deliberately. govulncheck compares against the
           # stdlib of the toolchain that built the code, so CI has to sit on the
@@ -289,7 +290,7 @@ jobs:
           # `go 1.26.5`) would hold setup-go on that patch forever, because a
           # full version is an exact match and check-latest cannot widen it.
           # Dropping the patch is what lets check-latest below do its job.
-          GO_MOD_VERSION=$(grep "^go " ${{ inputs.go_module_path }}/go.mod | cut -d' ' -f2)
+          GO_MOD_VERSION=$(grep "^go " ${GO_MODULE_PATH}/go.mod | cut -d' ' -f2)
           GO_VERSION=$(echo "$GO_MOD_VERSION" | cut -d. -f1,2)
           echo "Found Go version in go.mod: $GO_MOD_VERSION (resolving as $GO_VERSION)"
 
@@ -452,7 +453,7 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
+        # zizmor: ignore[template-injection] go_test_args is shell by design
         working-directory: ${{ inputs.go_module_path }}
         run: |
           set +e
@@ -561,11 +562,12 @@ jobs:
             GO_VERSION=${{ needs.setup.outputs.go-version }}
 
       - name: Save container image
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ inputs.enable_kubernetes_tests || inputs.enable_container_tests }}
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          docker save ${{ inputs.app_name }}:test | \
-            gzip > /tmp/${{ inputs.app_name }}.tar.gz
+          docker save ${APP_NAME}:test | \
+            gzip > /tmp/${APP_NAME}.tar.gz
 
       - name: Upload container artifact
         if: ${{ inputs.enable_kubernetes_tests || inputs.enable_container_tests }}
@@ -669,18 +671,20 @@ jobs:
           path: /tmp
 
       - name: Load container image
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
+          gunzip -c /tmp/${APP_NAME}.tar.gz | docker load
           docker image ls -a
 
       - name: Setup Minikube
         uses: mac-lucky/actions-shared-workflows/.github/actions/setup-minikube@master
 
       - name: Load Docker image into Minikube
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          minikube image load ${{ inputs.app_name }}:test
+          minikube image load ${APP_NAME}:test
 
       - name: Deploy with Helm
         uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@master
@@ -695,11 +699,13 @@ jobs:
           app_label_selector: ${{ inputs.app_label_selector != '' && inputs.app_label_selector || inputs.app_name }}
 
       - name: Check logs
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
+        env:
+          APP_LABEL_SELECTOR: ${{ inputs.app_label_selector }}
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          APP_LABEL="${{ inputs.app_label_selector }}"
+          APP_LABEL="${APP_LABEL_SELECTOR}"
           if [ -z "$APP_LABEL" ]; then
-            APP_LABEL="${{ inputs.app_name }}"
+            APP_LABEL="${APP_NAME}"
           fi
 
           sleep 30
@@ -707,27 +713,31 @@ jobs:
           kubectl logs -l app=$APP_LABEL -n monitoring --tail=50
 
       - name: Test metrics endpoint
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ inputs.enable_custom_metrics_test }}
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          HELM_RELEASE_NAME: ${{ inputs.helm_release_name }}
+          METRICS_PORT: ${{ inputs.metrics_port }}
+          METRICS_TEST_PATTERN: ${{ inputs.metrics_test_pattern }}
         run: |
-          RELEASE_NAME="${{ inputs.helm_release_name }}"
+          RELEASE_NAME="${HELM_RELEASE_NAME}"
           if [ -z "$RELEASE_NAME" ]; then
-            RELEASE_NAME="${{ inputs.app_name }}"
+            RELEASE_NAME="${APP_NAME}"
           fi
 
           echo "=== Testing metrics endpoint ==="
-          kubectl port-forward -n monitoring svc/$RELEASE_NAME ${{ inputs.metrics_port }}:${{ inputs.metrics_port }} &
+          kubectl port-forward -n monitoring svc/$RELEASE_NAME ${METRICS_PORT}:${METRICS_PORT} &
           PF_PID=$!
           sleep 10
 
           # Test metrics endpoint
-          response=$(curl -s http://localhost:${{ inputs.metrics_port }}/metrics)
-          if echo "$response" | grep -q "${{ inputs.metrics_test_pattern }}"; then
-            echo "✅ Metrics endpoint working - ${{ inputs.metrics_test_pattern }} found"
+          response=$(curl -s http://localhost:${METRICS_PORT}/metrics)
+          if echo "$response" | grep -q "${METRICS_TEST_PATTERN}"; then
+            echo "✅ Metrics endpoint working - ${METRICS_TEST_PATTERN} found"
             echo "Sample metrics:"
             echo "$response" | head -20
           else
-            echo "❌ Metrics endpoint not working - ${{ inputs.metrics_test_pattern }} not found"
+            echo "❌ Metrics endpoint not working - ${METRICS_TEST_PATTERN} not found"
             echo "Response received:"
             echo "$response"
             kill $PF_PID || true
@@ -738,12 +748,14 @@ jobs:
           kill $PF_PID || true
 
       - name: Cleanup
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: always()
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          HELM_RELEASE_NAME: ${{ inputs.helm_release_name }}
         run: |
-          RELEASE_NAME="${{ inputs.helm_release_name }}"
+          RELEASE_NAME="${HELM_RELEASE_NAME}"
           if [ -z "$RELEASE_NAME" ]; then
-            RELEASE_NAME="${{ inputs.app_name }}"
+            RELEASE_NAME="${APP_NAME}"
           fi
           
           helm uninstall $RELEASE_NAME -n monitoring || true
@@ -837,12 +849,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set version
-        # zizmor: ignore[template-injection] caller inputs and values computed earlier in this run
         id: set_version
+        env:
+          ENABLE_MAIN_DEV_TAG: ${{ inputs.enable_main_dev_tag }}
+          MAIN_BRANCH: ${{ inputs.main_branch }}
+          REL_VERSION: ${{ steps.rel.outputs.version }}
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            NEW_VERSION="${{ steps.rel.outputs.version }}"
-          elif [[ "${{ inputs.enable_main_dev_tag }}" == "true" && "$GITHUB_REF" == "refs/heads/${{ inputs.main_branch }}" ]]; then
+            NEW_VERSION="${REL_VERSION}"
+          elif [[ "${ENABLE_MAIN_DEV_TAG}" == "true" && "$GITHUB_REF" == "refs/heads/${MAIN_BRANCH}" ]]; then
             NEW_VERSION="main-${GITHUB_SHA:0:7}"
           else
             echo "Refusing to build: unexpected ref ${GITHUB_REF} reached the publish job."
@@ -938,11 +953,12 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
 
       - name: Export digest
-        # zizmor: ignore[template-injection] values computed earlier in this run
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          mkdir -p ${RUNNER_TEMP}/digests
+          digest="${DIGEST}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -963,6 +979,8 @@ jobs:
       packages: write
       security-events: write
       actions: read
+    env:
+      NEW_VERSION: ${{ needs.build.outputs.new-version }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -973,10 +991,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-
-      - name: Prepare version
-        # zizmor: ignore[template-injection] values computed earlier in this run
-        run: echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> "$GITHUB_ENV"
 
       - name: Docker meta
         id: meta
@@ -1009,32 +1023,29 @@ jobs:
           password: ${{ github.token }}
 
       - name: Create manifest list and push (GHCR)
-        # zizmor: ignore[template-injection] values computed earlier in this run
         working-directory: ${{ runner.temp }}/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+            $(printf "${REGISTRY_IMAGE_GHCR}@sha256:%s " *)
 
       - name: Create manifest list and push (Docker Hub)
-        # zizmor: ignore[template-injection] values computed earlier in this run
         if: ${{ inputs.push_to_dockerhub }}
         working-directory: ${{ runner.temp }}/digests
         run: |
           LATEST=""
-          case "${{ env.NEW_VERSION }}" in
+          case "${NEW_VERSION}" in
             *-*) ;;  # prerelease never moves latest, matching the GHCR tag set
-            *) LATEST="-t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest" ;;
+            *) LATEST="-t ${REGISTRY_IMAGE_DOCKERHUB}:latest" ;;
           esac
           # shellcheck disable=SC2086
           docker buildx imagetools create \
-            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }} \
+            -t ${REGISTRY_IMAGE_DOCKERHUB}:${NEW_VERSION} \
             $LATEST \
-            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+            $(printf "${REGISTRY_IMAGE_GHCR}@sha256:%s " *)
 
       - name: Inspect image
-        # zizmor: ignore[template-injection] values computed earlier in this run
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
+          docker buildx imagetools inspect ${REGISTRY_IMAGE_GHCR}:${NEW_VERSION}
 
       - name: Generate SBOM
         if: ${{ inputs.enable_sbom }}

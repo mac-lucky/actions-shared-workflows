@@ -14,29 +14,31 @@ runs:
   using: composite
   steps:
     - name: Wait for pods to be ready
-      # zizmor: ignore[template-injection] inputs come from the calling workflow
+      env:
+        APP_LABEL_SELECTOR: ${{ inputs.app_label_selector }}
       shell: bash
       run: |
-        kubectl wait --for=condition=ready pod -l app=${{ inputs.app_label_selector }} \
+        kubectl wait --for=condition=ready pod -l app=${APP_LABEL_SELECTOR} \
           -n monitoring --timeout=120s
 
     - name: Health check
-      # zizmor: ignore[template-injection] inputs come from the calling workflow
+      env:
+        APP_LABEL_SELECTOR: ${{ inputs.app_label_selector }}
       shell: bash
       run: |
         echo "=== Health check ==="
         # Check if all pods are running
-        READY_PODS=$(kubectl get pods -n monitoring -l app=${{ inputs.app_label_selector }} \
+        READY_PODS=$(kubectl get pods -n monitoring -l app=${APP_LABEL_SELECTOR} \
           -o jsonpath='{.items[*].status.phase}' | grep -o Running | wc -l)
         TOTAL_PODS=$(kubectl get pods -n monitoring \
-          -l app=${{ inputs.app_label_selector }} --no-headers | wc -l)
+          -l app=${APP_LABEL_SELECTOR} --no-headers | wc -l)
         echo "Ready pods: $READY_PODS / $TOTAL_PODS"
         if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && \
            [ "$TOTAL_PODS" -gt 0 ]; then
           echo "✅ All pods are running successfully"
         else
           echo "❌ Not all pods are running"
-          kubectl describe pods -n monitoring -l app=${{ inputs.app_label_selector }}
-          kubectl logs -n monitoring -l app=${{ inputs.app_label_selector }} --tail=50
+          kubectl describe pods -n monitoring -l app=${APP_LABEL_SELECTOR}
+          kubectl logs -n monitoring -l app=${APP_LABEL_SELECTOR} --tail=50
           exit 1
         fi

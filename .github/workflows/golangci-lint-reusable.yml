@@ -52,17 +52,19 @@ jobs:
           persist-credentials: false
 
       - name: Resolve Go version and modules
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         id: resolve
+        env:
+          IN_GO_VERSION: ${{ inputs.go_version }}
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
         run: |
           set -euo pipefail
 
-          if [ -n "${{ inputs.go_version }}" ]; then
-            GO_VERSION="${{ inputs.go_version }}"
+          if [ -n "${IN_GO_VERSION}" ]; then
+            GO_VERSION="${IN_GO_VERSION}"
           elif [ -f go.work ]; then
             GO_VERSION=$(awk 'NR==1 && $1=="go" {print $2; exit}' go.work)
-          elif [ -f "${{ inputs.working_directory }}/go.mod" ]; then
-            GO_VERSION=$(awk '$1=="go" {print $2; exit}' "${{ inputs.working_directory }}/go.mod")
+          elif [ -f "${WORKING_DIRECTORY}/go.mod" ]; then
+            GO_VERSION=$(awk '$1=="go" {print $2; exit}' "${WORKING_DIRECTORY}/go.mod")
           else
             echo "No go.work or go.mod found" >&2
             exit 1
@@ -78,7 +80,7 @@ jobs:
               inblock && NF {print $1}
             ' go.work | jq -R . | jq -sc .)
           else
-            MODS=$(printf '%s\n' "${{ inputs.working_directory }}" | jq -R . | jq -sc .)
+            MODS=$(printf '%s\n' "${WORKING_DIRECTORY}" | jq -R . | jq -sc .)
           fi
           echo "modules=$MODS" >> "$GITHUB_OUTPUT"
           echo "Linting modules: $MODS"

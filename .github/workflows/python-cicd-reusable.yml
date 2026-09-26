@@ -218,27 +218,30 @@ jobs:
           persist-credentials: false
 
       - name: Extract Python version
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         id: python-version
+        env:
+          BUILD_CONTEXT: ${{ inputs.build_context }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+          IN_PYTHON_VERSION: ${{ inputs.python_version }}
         run: |
           # Try to extract from Dockerfile first
-          if [ -f "${{ inputs.dockerfile_path }}" ]; then
-            PYTHON_VERSION=$(grep -E '^FROM.*python:' ${{ inputs.dockerfile_path }} | head -1 | sed -E 's/.*python:([0-9]+\.[0-9]+).*/\1/')
+          if [ -f "${DOCKERFILE_PATH}" ]; then
+            PYTHON_VERSION=$(grep -E '^FROM.*python:' ${DOCKERFILE_PATH} | head -1 | sed -E 's/.*python:([0-9]+\.[0-9]+).*/\1/')
           fi
 
           # Try .python-version file
-          if [ -z "$PYTHON_VERSION" ] && [ -f "${{ inputs.build_context }}/.python-version" ]; then
-            PYTHON_VERSION=$(tr -d '[:space:]' < "${{ inputs.build_context }}/.python-version")
+          if [ -z "$PYTHON_VERSION" ] && [ -f "${BUILD_CONTEXT}/.python-version" ]; then
+            PYTHON_VERSION=$(tr -d '[:space:]' < "${BUILD_CONTEXT}/.python-version")
           fi
 
           # Try pyproject.toml
-          if [ -z "$PYTHON_VERSION" ] && [ -f "${{ inputs.build_context }}/pyproject.toml" ]; then
-            PYTHON_VERSION=$(grep -E 'requires-python' "${{ inputs.build_context }}/pyproject.toml" | sed -E 's/.*>=([0-9]+\.[0-9]+).*/\1/' | head -1)
+          if [ -z "$PYTHON_VERSION" ] && [ -f "${BUILD_CONTEXT}/pyproject.toml" ]; then
+            PYTHON_VERSION=$(grep -E 'requires-python' "${BUILD_CONTEXT}/pyproject.toml" | sed -E 's/.*>=([0-9]+\.[0-9]+).*/\1/' | head -1)
           fi
 
           # Fallback to input or default
           if [ -z "$PYTHON_VERSION" ]; then
-            PYTHON_VERSION="${{ inputs.python_version }}"
+            PYTHON_VERSION="${IN_PYTHON_VERSION}"
           fi
 
           echo "Found Python version: $PYTHON_VERSION"
@@ -480,11 +483,12 @@ jobs:
             PYTHON_VERSION=${{ needs.setup.outputs.python-version }}
 
       - name: Save container image
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ inputs.enable_kubernetes_tests || inputs.enable_container_tests }}
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          docker save ${{ inputs.app_name }}:test | \
-            gzip > /tmp/${{ inputs.app_name }}.tar.gz
+          docker save ${APP_NAME}:test | \
+            gzip > /tmp/${APP_NAME}.tar.gz
 
       - name: Upload container artifact
         if: ${{ inputs.enable_kubernetes_tests || inputs.enable_container_tests }}
@@ -571,18 +575,20 @@ jobs:
           path: /tmp
 
       - name: Load container image
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          gunzip -c /tmp/${{ inputs.app_name }}.tar.gz | docker load
+          gunzip -c /tmp/${APP_NAME}.tar.gz | docker load
           docker image ls -a
 
       - name: Setup Minikube
         uses: mac-lucky/actions-shared-workflows/.github/actions/setup-minikube@master
 
       - name: Load Docker image into Minikube
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          minikube image load ${{ inputs.app_name }}:test
+          minikube image load ${APP_NAME}:test
 
       - name: Deploy with Helm
         uses: mac-lucky/actions-shared-workflows/.github/actions/helm-deploy@master
@@ -597,11 +603,13 @@ jobs:
           app_label_selector: ${{ inputs.app_label_selector != '' && inputs.app_label_selector || inputs.app_name }}
 
       - name: Check logs
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
+        env:
+          APP_LABEL_SELECTOR: ${{ inputs.app_label_selector }}
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          APP_LABEL="${{ inputs.app_label_selector }}"
+          APP_LABEL="${APP_LABEL_SELECTOR}"
           if [ -z "$APP_LABEL" ]; then
-            APP_LABEL="${{ inputs.app_name }}"
+            APP_LABEL="${APP_NAME}"
           fi
 
           sleep 30
@@ -609,27 +617,31 @@ jobs:
           kubectl logs -l app=$APP_LABEL -n monitoring --tail=50
 
       - name: Test metrics endpoint
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ inputs.enable_custom_metrics_test }}
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          HELM_RELEASE_NAME: ${{ inputs.helm_release_name }}
+          METRICS_PORT: ${{ inputs.metrics_port }}
+          METRICS_TEST_PATTERN: ${{ inputs.metrics_test_pattern }}
         run: |
-          RELEASE_NAME="${{ inputs.helm_release_name }}"
+          RELEASE_NAME="${HELM_RELEASE_NAME}"
           if [ -z "$RELEASE_NAME" ]; then
-            RELEASE_NAME="${{ inputs.app_name }}"
+            RELEASE_NAME="${APP_NAME}"
           fi
 
           echo "=== Testing metrics endpoint ==="
-          kubectl port-forward -n monitoring svc/$RELEASE_NAME ${{ inputs.metrics_port }}:${{ inputs.metrics_port }} &
+          kubectl port-forward -n monitoring svc/$RELEASE_NAME ${METRICS_PORT}:${METRICS_PORT} &
           PF_PID=$!
           sleep 10
 
           # Test metrics endpoint
-          response=$(curl -s http://localhost:${{ inputs.metrics_port }}/metrics)
-          if echo "$response" | grep -q "${{ inputs.metrics_test_pattern }}"; then
-            echo "✅ Metrics endpoint working - ${{ inputs.metrics_test_pattern }} found"
+          response=$(curl -s http://localhost:${METRICS_PORT}/metrics)
+          if echo "$response" | grep -q "${METRICS_TEST_PATTERN}"; then
+            echo "✅ Metrics endpoint working - ${METRICS_TEST_PATTERN} found"
             echo "Sample metrics:"
             echo "$response" | head -20
           else
-            echo "❌ Metrics endpoint not working - ${{ inputs.metrics_test_pattern }} not found"
+            echo "❌ Metrics endpoint not working - ${METRICS_TEST_PATTERN} not found"
             echo "Response received:"
             echo "$response"
             kill $PF_PID || true
@@ -640,12 +652,14 @@ jobs:
           kill $PF_PID || true
 
       - name: Cleanup
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: always()
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          HELM_RELEASE_NAME: ${{ inputs.helm_release_name }}
         run: |
-          RELEASE_NAME="${{ inputs.helm_release_name }}"
+          RELEASE_NAME="${HELM_RELEASE_NAME}"
           if [ -z "$RELEASE_NAME" ]; then
-            RELEASE_NAME="${{ inputs.app_name }}"
+            RELEASE_NAME="${APP_NAME}"
           fi
 
           helm uninstall $RELEASE_NAME -n monitoring || true
@@ -829,11 +843,12 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
 
       - name: Export digest
-        # zizmor: ignore[template-injection] values computed earlier in this run
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          mkdir -p ${RUNNER_TEMP}/digests
+          digest="${DIGEST}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -854,6 +869,8 @@ jobs:
       packages: write
       security-events: write
       actions: read
+    env:
+      NEW_VERSION: ${{ needs.build.outputs.new-version }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -864,11 +881,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-
-      - name: Prepare version
-        # zizmor: ignore[template-injection] values computed earlier in this run
-        run: |
-          echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> $GITHUB_ENV
 
       - name: Docker meta
         id: meta
@@ -895,32 +907,29 @@ jobs:
           password: ${{ github.token }}
 
       - name: Create manifest list and push (GHCR)
-        # zizmor: ignore[template-injection] values computed earlier in this run
         working-directory: ${{ runner.temp }}/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+            $(printf "${REGISTRY_IMAGE_GHCR}@sha256:%s " *)
 
       - name: Create manifest list and push (Docker Hub)
-        # zizmor: ignore[template-injection] values computed earlier in this run
         if: ${{ inputs.push_to_dockerhub }}
         working-directory: ${{ runner.temp }}/digests
         run: |
           LATEST=""
-          case "${{ env.NEW_VERSION }}" in
+          case "${NEW_VERSION}" in
             *-*) ;;  # prerelease never moves latest, matching the GHCR tag set
-            *) LATEST="-t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest" ;;
+            *) LATEST="-t ${REGISTRY_IMAGE_DOCKERHUB}:latest" ;;
           esac
           # shellcheck disable=SC2086
           docker buildx imagetools create \
-            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }} \
+            -t ${REGISTRY_IMAGE_DOCKERHUB}:${NEW_VERSION} \
             $LATEST \
-            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+            $(printf "${REGISTRY_IMAGE_GHCR}@sha256:%s " *)
 
       - name: Inspect image
-        # zizmor: ignore[template-injection] values computed earlier in this run
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
+          docker buildx imagetools inspect ${REGISTRY_IMAGE_GHCR}:${NEW_VERSION}
 
       - name: Generate SBOM
         if: ${{ inputs.enable_sbom }}

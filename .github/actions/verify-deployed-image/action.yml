@@ -27,16 +27,18 @@ runs:
         password: ${{ inputs.github_token }}
 
     - name: Verify image pull and functionality
-      # zizmor: ignore[template-injection] inputs come from the calling workflow
+      env:
+        REGISTRY_IMAGE: ${{ inputs.registry_image }}
+        TAG: ${{ inputs.tag }}
       shell: bash
       run: |
-        echo "Verifying ${{ inputs.registry_image }}:${{ inputs.tag }} can be pulled from GHCR..."
+        echo "Verifying ${REGISTRY_IMAGE}:${TAG} can be pulled from GHCR..."
         for i in $(seq 1 5); do
-          if docker pull ${{ inputs.registry_image }}:${{ inputs.tag }}; then
+          if docker pull ${REGISTRY_IMAGE}:${TAG}; then
             break
           fi
           echo "Attempt $i/5 failed, retrying in 15s..."
           sleep 15
         done
-        docker inspect ${{ inputs.registry_image }}:${{ inputs.tag }} > /dev/null
+        docker inspect ${REGISTRY_IMAGE}:${TAG} > /dev/null
         echo "Image verification successful"

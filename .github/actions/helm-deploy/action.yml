@@ -26,13 +26,16 @@ runs:
         version: 'latest'
 
     - name: Deploy application with Helm
-      # zizmor: ignore[template-injection] inputs come from the calling workflow
+      env:
+        APP_NAME: ${{ inputs.app_name }}
+        CHART_PATH: ${{ inputs.chart_path }}
+        RELEASE_NAME: ${{ inputs.release_name }}
       shell: bash
       run: |
-        helm upgrade --install ${{ inputs.release_name }} ${{ inputs.chart_path }} \
+        helm upgrade --install ${RELEASE_NAME} ${CHART_PATH} \
           --namespace monitoring \
           --set image.tag=test \
-          --set image.repository=${{ inputs.app_name }} \
+          --set image.repository=${APP_NAME} \
           --set image.pullPolicy=Never \
           --set serviceMonitor.enabled=false \
           --wait --timeout=300s

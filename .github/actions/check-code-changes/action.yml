@@ -25,18 +25,21 @@ runs:
   using: composite
   steps:
     - name: Check for code changes
-      # zizmor: ignore[template-injection] inputs come from the calling workflow
       id: changes
+      env:
+        DETECT_WORKFLOW_CHANGES: ${{ inputs.detect_workflow_changes }}
+        EVENT_NAME: ${{ inputs.event_name }}
+        FILE_PATTERNS: ${{ inputs.file_patterns }}
       shell: bash
       run: |
-        if [ "${{ inputs.event_name }}" = "release" ]; then
+        if [ "${EVENT_NAME}" = "release" ]; then
           echo "Release event - forcing build"
           echo "code=true" >> $GITHUB_OUTPUT
           exit 0
         fi
 
         # For workflow_dispatch, always build
-        if [ "${{ inputs.event_name }}" = "workflow_dispatch" ]; then
+        if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
           echo "Manual workflow dispatch - forcing build"
           echo "code=true" >> $GITHUB_OUTPUT
           exit 0
@@ -44,7 +47,7 @@ runs:
 
         # Tag pushes are releases - always build, regardless of the tagged commit's
         # own diff (a release can point at a docs/CI-only tip commit).
-        if [ "${{ inputs.event_name }}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+        if [ "${EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
           echo "Tag push - forcing build"
           echo "code=true" >> $GITHUB_OUTPUT
           echo "workflow=false" >> $GITHUB_OUTPUT
@@ -52,16 +55,16 @@ runs:
         fi
 
         # For push events, check if there are changes to code files
-        if [ "${{ inputs.event_name }}" = "push" ]; then
+        if [ "${EVENT_NAME}" = "push" ]; then
           # Check if previous commit exists
           if git rev-parse HEAD~1 >/dev/null 2>&1; then
             # Check for changes in language-specific files
             CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
 
             # Look for changes matching the file pattern
-            if echo "$CHANGED_FILES" | grep -E '${{ inputs.file_patterns }}' > /dev/null; then
+            if echo "$CHANGED_FILES" | grep -E "${FILE_PATTERNS}" > /dev/null; then
               echo "Code changes detected:"
-              echo "$CHANGED_FILES" | grep -E '${{ inputs.file_patterns }}'
+              echo "$CHANGED_FILES" | grep -E "${FILE_PATTERNS}"
               echo "code=true" >> $GITHUB_OUTPUT
             else
               echo "No code changes detected. Only documentation/config changes:"
@@ -70,7 +73,7 @@ runs:
             fi
 
             # Check for workflow changes if requested
-            if [ "${{ inputs.detect_workflow_changes }}" = "true" ]; then
+            if [ "${DETECT_WORKFLOW_CHANGES}" = "true" ]; then
               if echo "$CHANGED_FILES" | grep -E '\.github/workflows/' > /dev/null; then
                 echo "Workflow changes detected"
                 echo "workflow=true" >> $GITHUB_OUTPUT

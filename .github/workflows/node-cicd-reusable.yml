@@ -218,19 +218,21 @@ jobs:
           persist-credentials: false
 
       - name: Extract Node version
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         id: node-version
+        env:
+          DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+          IN_NODE_VERSION: ${{ inputs.node_version }}
         run: |
           NODE_VERSION=""
 
           # Try to extract from Dockerfile first (e.g., FROM node:22-alpine)
-          if [ -f "${{ inputs.dockerfile_path }}" ]; then
-            NODE_VERSION=$(grep -E '^FROM.*node:' ${{ inputs.dockerfile_path }} | head -1 | sed -E 's/.*node:([0-9]+).*/\1/')
+          if [ -f "${DOCKERFILE_PATH}" ]; then
+            NODE_VERSION=$(grep -E '^FROM.*node:' ${DOCKERFILE_PATH} | head -1 | sed -E 's/.*node:([0-9]+).*/\1/')
           fi
 
           # Fallback to input default
           if [ -z "$NODE_VERSION" ]; then
-            NODE_VERSION="${{ inputs.node_version }}"
+            NODE_VERSION="${IN_NODE_VERSION}"
           fi
 
           echo "Found Node version: $NODE_VERSION"
@@ -277,11 +279,12 @@ jobs:
             bun-${{ runner.os }}-
 
       - name: Install dependencies
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ matrix.tool != 'grype' }}
+        env:
+          PACKAGE_MANAGER: ${{ inputs.package_manager }}
         working-directory: ${{ inputs.build_context }}
         run: |
-          if [ "${{ inputs.package_manager }}" = "bun" ]; then
+          if [ "${PACKAGE_MANAGER}" = "bun" ]; then
             bun install --frozen-lockfile 2>/dev/null || bun install
           else
             npm ci 2>/dev/null || npm install
@@ -303,11 +306,12 @@ jobs:
           fi
 
       - name: Run build check
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: matrix.tool == 'build-check'
+        env:
+          PACKAGE_MANAGER: ${{ inputs.package_manager }}
         working-directory: ${{ inputs.build_context }}
         run: |
-          if [ "${{ inputs.package_manager }}" = "bun" ]; then
+          if [ "${PACKAGE_MANAGER}" = "bun" ]; then
             BUILD_CMD="bun run build"
           else
             BUILD_CMD="npm run build"
@@ -370,11 +374,12 @@ jobs:
           load: true
 
       - name: Save container image
-        # zizmor: ignore[template-injection] inputs come from the calling workflow
         if: ${{ inputs.enable_container_tests }}
+        env:
+          APP_NAME: ${{ inputs.app_name }}
         run: |
-          docker save ${{ inputs.app_name }}:test | \
-            gzip > /tmp/${{ inputs.app_name }}.tar.gz
+          docker save ${APP_NAME}:test | \
+            gzip > /tmp/${APP_NAME}.tar.gz
 
       - name: Upload container artifact
         if: ${{ inputs.enable_container_tests }}
@@ -610,11 +615,12 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
 
       - name: Export digest
-        # zizmor: ignore[template-injection] values computed earlier in this run
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          mkdir -p ${RUNNER_TEMP}/digests
+          digest="${DIGEST}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -635,6 +641,8 @@ jobs:
       packages: write
       security-events: write
       actions: read
+    env:
+      NEW_VERSION: ${{ needs.build.outputs.new-version }}
     steps:
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -645,11 +653,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-
-      - name: Prepare version
-        # zizmor: ignore[template-injection] values computed earlier in this run
-        run: |
-          echo "NEW_VERSION=${{ needs.build.outputs.new-version }}" >> $GITHUB_ENV
 
       - name: Docker meta
         id: meta
@@ -676,32 +679,29 @@ jobs:
           password: ${{ github.token }}
 
       - name: Create manifest list and push (GHCR)
-        # zizmor: ignore[template-injection] values computed earlier in this run
         working-directory: ${{ runner.temp }}/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+            $(printf "${REGISTRY_IMAGE_GHCR}@sha256:%s " *)
 
       - name: Create manifest list and push (Docker Hub)
-        # zizmor: ignore[template-injection] values computed earlier in this run
         if: ${{ inputs.push_to_dockerhub }}
         working-directory: ${{ runner.temp }}/digests
         run: |
           LATEST=""
-          case "${{ env.NEW_VERSION }}" in
+          case "${NEW_VERSION}" in
             *-*) ;;  # prerelease never moves latest, matching the GHCR tag set
-            *) LATEST="-t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:latest" ;;
+            *) LATEST="-t ${REGISTRY_IMAGE_DOCKERHUB}:latest" ;;
           esac
           # shellcheck disable=SC2086
           docker buildx imagetools create \
-            -t ${{ env.REGISTRY_IMAGE_DOCKERHUB }}:${{ env.NEW_VERSION }} \
+            -t ${REGISTRY_IMAGE_DOCKERHUB}:${NEW_VERSION} \
             $LATEST \
-            $(printf '${{ env.REGISTRY_IMAGE_GHCR }}@sha256:%s ' *)
+            $(printf "${REGISTRY_IMAGE_GHCR}@sha256:%s " *)
 
       - name: Inspect image
-        # zizmor: ignore[template-injection] values computed earlier in this run
         run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE_GHCR }}:${{ env.NEW_VERSION }}
+          docker buildx imagetools inspect ${REGISTRY_IMAGE_GHCR}:${NEW_VERSION}
 
       - name: Generate SBOM
         if: ${{ inputs.enable_sbom }}
