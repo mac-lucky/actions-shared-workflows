@@ -55,6 +55,9 @@ jobs:
           - caller: pushward-mcp
             tools: staticcheck govulncheck gosec govulncheck-binary
             modules: .
+          - caller: pushward-cli
+            tools: staticcheck govulncheck gosec
+            modules: .
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
