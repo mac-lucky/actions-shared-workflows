@@ -587,12 +587,14 @@ jobs:
   # caches written on its own ref or the default branch - without this job every
   # release built arm64 from scratch. Deliberately outside the release path and
   # absent from all-checks: a hiccup here costs one cold build, never a red run.
+  # Skipped where the :main dev image is published: that build job already
+  # writes the same scope.
   warm-arm64:
     name: Warm arm64 Build Cache
     runs-on: ${{ inputs.runner_arm64 }}
     timeout-minutes: 60
     needs: [check-changes, setup]
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && needs.check-changes.outputs.code-changed == 'true' }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && needs.check-changes.outputs.code-changed == 'true' && !(inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch)) }}
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -644,7 +646,8 @@ jobs:
         with:
           image_tar: /tmp/${{ inputs.app_name }}.tar.gz
           container_name: ${{ inputs.app_name }}
-          enable_security_scan: ${{ inputs.enable_security_scan }}
+          # Advisory scan; on a tag the build job's per-arch scan gates instead.
+          enable_security_scan: ${{ inputs.enable_security_scan && !startsWith(github.ref, 'refs/tags/') }}
           pre_test_script: ${{ inputs.container_test_pre_script }}
           docker_run_args: ${{ inputs.container_test_run_args }}
           health_check_url: ${{ inputs.container_test_health_url }}

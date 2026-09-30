@@ -456,7 +456,8 @@ jobs:
         with:
           image_tar: /tmp/${{ inputs.app_name }}.tar.gz
           container_name: ${{ inputs.app_name }}
-          enable_security_scan: ${{ inputs.enable_security_scan }}
+          # Advisory scan; on a tag the build job's per-arch scan gates instead.
+          enable_security_scan: ${{ inputs.enable_security_scan && !startsWith(github.ref, 'refs/tags/') }}
           pre_test_script: ${{ inputs.container_test_pre_script }}
           docker_run_args: ${{ inputs.container_test_run_args }}
           health_check_url: ${{ inputs.container_test_health_url }}
