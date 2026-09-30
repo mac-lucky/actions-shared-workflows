@@ -13,6 +13,18 @@ inputs:
 runs:
   using: composite
   steps:
+    # The cache key needs the pin, which lives in the script.
+    - name: Read hadolint pin
+      id: pin
+      shell: bash
+      run: echo "version=$(sed -n 's/^HADOLINT_VERSION=//p' "$GITHUB_ACTION_PATH/run-hadolint.sh")" >> "$GITHUB_OUTPUT"
+
+    - name: Cache hadolint
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ${{ runner.temp }}/hadolint
+        key: hadolint-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}
+
     # run-hadolint.sh holds the pin and the checksum check; the Forgejo twin
     # (buildah-build.yml in forgejo-shared-workflows) runs the same script.
     - name: Run hadolint
