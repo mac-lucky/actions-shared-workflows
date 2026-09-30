@@ -255,6 +255,11 @@ jobs:
           cat ./.grype.yaml
           exit 0
 
+      - name: Grype DB
+        id: grype-db
+        if: ${{ inputs.enable_security_scan && !startsWith(github.ref, 'refs/tags/') }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db@master
+
       - name: Container security scan (Grype)
         id: scan
         if: ${{ inputs.enable_security_scan && !startsWith(github.ref, 'refs/tags/') }}
@@ -266,6 +271,13 @@ jobs:
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
           only-fixed: ${{ inputs.scan_only_fixed }}
           fail-build: ${{ inputs.scan_fail_build }}
+
+      # Default-branch pushes fill the DB cache the build job restores on tags.
+      - name: Save Grype DB
+        if: ${{ steps.grype-db.outputs.save == 'true' }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db-save@master
+        with:
+          key: ${{ steps.grype-db.outputs.key }}
 
       # Passes the gate when every gating finding is on its package's newest
       # release (nothing to upgrade to); fails it otherwise.
@@ -446,6 +458,10 @@ jobs:
           echo "----- effective .grype.yaml -----"
           cat ./.grype.yaml
           exit 0
+
+      - name: Grype DB
+        if: ${{ inputs.enable_security_scan }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db@master
 
       # Scan the built image. With fail-build:true a gating finding the waiver step keeps
       # fails the job, so the push step below never runs and merge (needs: build) is skipped.

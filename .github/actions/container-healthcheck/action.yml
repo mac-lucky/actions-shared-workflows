@@ -97,11 +97,24 @@ runs:
         docker rm test-postgres 2>/dev/null || true
         docker network rm test-net 2>/dev/null || true
 
+    - name: Grype DB
+      id: grype-db
+      if: ${{ inputs.enable_security_scan == 'true' }}
+      uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db@master
+
     - name: Container security scan
       if: ${{ inputs.enable_security_scan == 'true' }}
-      uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         image: "${{ inputs.container_name }}:test"
         output-format: "table"
         fail-build: "false"
         only-fixed: "true"
+
+    # The only scan go/node/python run on default-branch pushes, so the one
+    # that fills the DB cache their tag builds restore.
+    - name: Save Grype DB
+      if: ${{ steps.grype-db.outputs.save == 'true' }}
+      uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db-save@master
+      with:
+        key: ${{ steps.grype-db.outputs.key }}

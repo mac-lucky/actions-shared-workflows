@@ -1,0 +1,43 @@
+name: Grype DB Save
+description: >-
+  Store the DB the grype-db action downloaded, so later runs restore it instead
+  of fetching it. Saves only on pushes to the default branch: a tag run can read
+  caches from its own ref and the default branch, never from another tag or a
+  PR. Skipped when the repo already uses 8 GB of its 10 GB cache budget, so the
+  daily DB never evicts the buildx caches releases restore from.
+
+inputs:
+  key:
+    description: The grype-db action's key output
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Needs actions:read. A token without it, or any other API error, skips
+    # the save: a missed save costs one download, an overfull cache costs
+    # cold release builds.
+    - name: Check cache budget
+      id: budget
+      if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if ! used=$(gh api "repos/${GITHUB_REPOSITORY}/actions/cache/usage" --jq .active_caches_size_in_bytes) \
+          || ! [[ $used =~ ^[0-9]+$ ]]; then
+          echo "::notice::could not read the repo's cache usage; not saving the Grype DB"
+          exit 0
+        fi
+        if [ "$used" -ge $((8 * 1024 * 1024 * 1024)) ]; then
+          echo "::notice::repo caches use $((used / 1024 / 1024)) MB; not saving the Grype DB"
+          exit 0
+        fi
+        echo "ok=true" >> "$GITHUB_OUTPUT"
+
+    - name: Save Grype DB
+      if: ${{ steps.budget.outputs.ok == 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.cache/grype-db
+        key: ${{ inputs.key }}

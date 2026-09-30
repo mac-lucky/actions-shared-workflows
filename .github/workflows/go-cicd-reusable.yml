@@ -915,6 +915,11 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
 
+      - name: Grype DB
+        id: grype-db
+        if: ${{ inputs.enable_security_scan }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db@master
+
       # Scan the built image; with fail-build:true a gating finding the waiver step keeps fails
       # the job, so the push step never runs and merge (needs: build) is skipped.
       - name: Container security scan (Grype)
@@ -928,6 +933,13 @@ jobs:
           severity-cutoff: ${{ inputs.scan_severity_cutoff }}
           only-fixed: ${{ inputs.scan_only_fixed }}
           fail-build: ${{ inputs.scan_fail_build }}
+
+      # Only the :main dev image build runs this job on the default branch.
+      - name: Save Grype DB
+        if: ${{ steps.grype-db.outputs.save == 'true' }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db-save@master
+        with:
+          key: ${{ steps.grype-db.outputs.key }}
 
       # Passes the gate when every gating finding is on its package's newest
       # release (nothing to upgrade to); fails it otherwise.

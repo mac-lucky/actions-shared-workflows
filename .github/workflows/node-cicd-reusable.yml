@@ -572,6 +572,11 @@ jobs:
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,scope=build-${{ env.PLATFORM_PAIR }},mode=max
 
+      # Restores the DB container-test saved on the default branch.
+      - name: Grype DB
+        if: ${{ inputs.enable_security_scan }}
+        uses: mac-lucky/actions-shared-workflows/.github/actions/grype-db@master
+
       # Scan the built image; with fail-build:true a gating finding the waiver step keeps fails
       # the job, so the push step never runs and merge (needs: build) is skipped.
       - name: Container security scan (Grype)

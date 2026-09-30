@@ -1,0 +1,92 @@
+name: Grype DB
+description: >-
+  Restore the Grype vulnerability DB from the Actions cache, keyed on the
+  checksum in Anchore's v6 listing, and download it only when the cache does
+  not hold the current one. When the DB is the one the listing names, the rest
+  of the job (scan-action, grype-newest-release) reads it through
+  GRYPE_DB_CACHE_DIR with GRYPE_DB_AUTO_UPDATE=false. Otherwise nothing is
+  exported and the scan fetches the DB itself, as it did before this action
+  existed. Saving is left to grype-db-save, after the scan.
+
+outputs:
+  key:
+    description: Cache key of the current DB
+    value: ${{ steps.key.outputs.key }}
+  save:
+    description: "'true' when this job downloaded the current DB and grype-db-save should store it"
+    value: ${{ steps.db.outputs.save }}
+
+runs:
+  using: composite
+  steps:
+    # A new DB is published about once a day. Without the listing there is
+    # nothing to check a DB against, so the steps below are skipped.
+    - name: Resolve Grype DB cache key
+      id: key
+      shell: bash
+      run: |
+        listing=https://grype.anchore.io/databases/v6/latest.json
+        if json=$(curl -sSfL --retry 2 --connect-timeout 10 --max-time 30 "$listing") \
+          && sum=$(jq -er '.checksum | ltrimstr("sha256:")' <<< "$json") \
+          && path=$(jq -er .path <<< "$json") \
+          && [[ $sum =~ ^[0-9a-f]{64}$ && $path =~ ^[A-Za-z0-9._:+-]+$ ]]; then
+          {
+            echo "key=grype-db-v6-${sum:0:16}"
+            echo "path=$path"
+          } >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::could not read $listing; the scan fetches the Grype DB itself"
+        fi
+
+    - name: Restore Grype DB
+      id: restore
+      if: ${{ steps.key.outputs.path != '' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: ~/.cache/grype-db
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: grype-db-v6-
+
+    # Same pin as every scan-action step, so the scan finds this binary in the
+    # tool cache instead of downloading its own.
+    - name: Install grype
+      id: grype
+      if: ${{ steps.key.outputs.path != '' }}
+      continue-on-error: true
+      uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+
+    # Whatever was restored, only the DB the listing names is exported or saved.
+    - name: Update and check Grype DB
+      id: db
+      if: ${{ steps.key.outputs.path != '' }}
+      shell: bash
+      env:
+        GRYPE: ${{ steps.grype.outputs.cmd }}
+        EXACT_HIT: ${{ steps.restore.outputs.cache-hit }}
+        DB_PATH: ${{ steps.key.outputs.path }}
+      run: |
+        [ -n "$GRYPE" ] || { echo "::warning::grype is not installed; the scan fetches the DB itself"; exit 0; }
+        export GRYPE_DB_CACHE_DIR="$HOME/.cache/grype-db"
+        save=false
+        if [ "$EXACT_HIT" != true ]; then
+          if ! "$GRYPE" db update; then
+            echo "::warning::grype db update failed; the scan fetches the DB itself"
+            exit 0
+          fi
+          save=true
+        fi
+        from=
+        if status=$("$GRYPE" db status -o json); then
+          from=$(jq -r '.from // empty' <<< "$status")
+          from=${from%%\?*}
+        fi
+        if [[ $from != */"$DB_PATH" ]]; then
+          echo "::warning::the Grype DB in $GRYPE_DB_CACHE_DIR is not $DB_PATH (${from:-invalid}); the scan fetches the DB itself"
+          exit 0
+        fi
+        echo "Using Grype DB $DB_PATH"
+        {
+          echo "GRYPE_DB_CACHE_DIR=$GRYPE_DB_CACHE_DIR"
+          echo "GRYPE_DB_AUTO_UPDATE=false"
+        } >> "$GITHUB_ENV"
+        echo "save=$save" >> "$GITHUB_OUTPUT"
