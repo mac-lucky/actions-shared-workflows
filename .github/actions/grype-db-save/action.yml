@@ -1,7 +1,8 @@
 name: Grype DB Save
 description: >-
   Store the DB the grype-db action downloaded, so later runs restore it instead
-  of fetching it. Saves only on pushes to the default branch: a tag run can read
+  of fetching it. Saves only on default-branch runs (push, dispatch, schedule;
+  never a PR): a tag run can read
   caches from its own ref and the default branch, never from another tag or a
   PR. Skipped when the repo already uses 8 GB of its 10 GB cache budget, so the
   daily DB never evicts the buildx caches releases restore from.
@@ -19,7 +20,7 @@ runs:
     # cold release builds.
     - name: Check cache budget
       id: budget
-      if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+      if: ${{ !startsWith(github.event_name, 'pull_request') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
