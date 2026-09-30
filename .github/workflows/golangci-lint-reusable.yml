@@ -43,6 +43,7 @@ jobs:
   discover:
     name: Discover modules
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
     outputs:
       go_version: ${{ steps.resolve.outputs.go_version }}
       modules: ${{ steps.resolve.outputs.modules }}

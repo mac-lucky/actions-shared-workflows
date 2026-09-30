@@ -249,6 +249,7 @@ jobs:
   check-changes:
     name: Check for Code Changes
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 10
     outputs:
       code-changed: ${{ steps.changes.outputs.code-changed }}
     steps:
@@ -269,6 +270,7 @@ jobs:
   setup:
     name: Setup Build Environment
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 10
     needs: check-changes
     outputs:
       go-version: ${{ steps.go-version.outputs.version }}
@@ -301,6 +303,7 @@ jobs:
   code-analysis:
     name: Code Analysis (${{ matrix.tool }})
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 30
     needs: [check-changes, setup]
     if: ${{ inputs.code_analysis_tools != '[]' && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
     strategy:
@@ -429,6 +432,7 @@ jobs:
   go-test:
     name: Go Tests
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 30
     needs: [check-changes, setup]
     if: ${{ inputs.enable_go_tests && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.code-changed == 'true') }}
     steps:
@@ -519,6 +523,7 @@ jobs:
   build-container:
     name: Build Container Image
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 60
     # Runs in parallel with code-analysis and go-test: the image build takes no
     # input from them, and the publish gate on their results lives in the build
     # job below. A lint or test failure still reds the run through all-checks.
@@ -585,6 +590,7 @@ jobs:
   warm-arm64:
     name: Warm arm64 Build Cache
     runs-on: ${{ inputs.runner_arm64 }}
+    timeout-minutes: 60
     needs: [check-changes, setup]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && needs.check-changes.outputs.code-changed == 'true' }}
     continue-on-error: true
@@ -618,6 +624,7 @@ jobs:
   container-test:
     name: Container Integration Test
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 45
     needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_container_tests }}
     steps:
@@ -646,6 +653,7 @@ jobs:
   kubernetes-test:
     name: Kubernetes Integration Test
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 45
     needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' }}
     steps:
@@ -765,6 +773,7 @@ jobs:
   build:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     needs: [check-changes, setup, code-analysis, go-test, build-container, container-test, kubernetes-test]
     # always() switches off the implicit "skip when a dependency failed" rule, so
     # every gate has to be checked explicitly or a failed job still publishes.
@@ -972,6 +981,7 @@ jobs:
   merge:
     name: Create Multi-arch Manifest
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 60
     needs: [check-changes, setup, build]
     if: ${{ always() && needs.build.result == 'success' && github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/') || (inputs.enable_main_dev_tag && github.ref == format('refs/heads/{0}', inputs.main_branch))) }}
     permissions:
@@ -1070,6 +1080,7 @@ jobs:
   post-deploy-verify:
     name: Post-deployment Verification
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 10
     needs: [check-changes, build, merge]
     if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
@@ -1087,6 +1098,7 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 60
     needs: [build, merge]
     if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
@@ -1142,6 +1154,7 @@ jobs:
   all-checks:
     name: All checks passed
     runs-on: ${{ inputs.runner_default }}
+    timeout-minutes: 5
     needs: [check-changes, setup, code-analysis, go-test, build-container, container-test, kubernetes-test, build, merge, post-deploy-verify, release]
     if: ${{ always() }}
     steps:

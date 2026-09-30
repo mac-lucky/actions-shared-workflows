@@ -186,6 +186,7 @@ jobs:
   check-changes:
     name: Check for Code Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       code-changed: ${{ steps.changes.outputs.code-changed }}
       workflow-changed: ${{ steps.changes.outputs.workflow-changed }}
@@ -208,6 +209,7 @@ jobs:
   setup:
     name: Setup Build Environment
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: check-changes
     outputs:
       python-version: ${{ steps.python-version.outputs.version }}
@@ -251,6 +253,7 @@ jobs:
   code-analysis:
     name: Code Analysis (${{ matrix.tool }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [check-changes, setup]
     if: ${{ inputs.enable_code_analysis && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     strategy:
@@ -372,6 +375,7 @@ jobs:
   unit-test:
     name: Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [check-changes, setup]
     if: ${{ inputs.enable_unit_tests && (github.event_name != 'push' || needs.check-changes.outputs.code-changed == 'true') }}
     steps:
@@ -439,6 +443,7 @@ jobs:
   build-container:
     name: Build Container Image
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # Runs in parallel with code-analysis and unit-test: the image build takes
     # no input from them, and the publish gate on their results lives in the
     # build job below. A lint or test failure still reds the run through
@@ -506,6 +511,7 @@ jobs:
   warm-arm64:
     name: Warm arm64 Build Cache
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     needs: [check-changes, setup]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && needs.check-changes.outputs.code-changed == 'true' }}
     continue-on-error: true
@@ -535,6 +541,7 @@ jobs:
   container-test:
     name: Container Integration Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_container_tests && needs.build-container.result == 'success' }}
     steps:
@@ -560,6 +567,7 @@ jobs:
   kubernetes-test:
     name: Kubernetes Integration Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [check-changes, setup, build-container]
     if: ${{ inputs.enable_kubernetes_tests && inputs.helm_chart_path != '' && needs.build-container.result == 'success' }}
     steps:
@@ -669,6 +677,7 @@ jobs:
   build:
     name: Build (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     needs: [check-changes, setup, code-analysis, unit-test, build-container, container-test, kubernetes-test]
     # always() switches off the implicit "skip when a dependency failed" rule, so
     # every gate has to be checked explicitly or a failed job still publishes.
@@ -862,6 +871,7 @@ jobs:
   merge:
     name: Create Multi-arch Manifest
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [check-changes, setup, build]
     if: ${{ always() && needs.build.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     permissions:
@@ -954,6 +964,7 @@ jobs:
   post-deploy-verify:
     name: Post-deployment Verification
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [check-changes, build, merge]
     if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
@@ -971,6 +982,7 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [build, merge]
     if: ${{ always() && needs.merge.result == 'success' && startsWith(github.ref, 'refs/tags/') }}
     steps:
@@ -1026,6 +1038,7 @@ jobs:
   all-checks:
     name: All checks passed
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [check-changes, setup, code-analysis, unit-test, build-container, container-test, kubernetes-test, build, merge, post-deploy-verify, release]
     if: ${{ always() }}
     steps:

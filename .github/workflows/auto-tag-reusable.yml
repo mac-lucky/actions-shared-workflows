@@ -40,6 +40,7 @@ jobs:
   tag:
     name: Create release tag
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # An unset caller secret passes the required:true declaration as an empty
       # string and then fails inside checkout with an unhelpful message; fail
