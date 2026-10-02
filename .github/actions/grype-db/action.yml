@@ -6,7 +6,9 @@ description: >-
   of the job (scan-action, grype-newest-release) reads it through
   GRYPE_DB_CACHE_DIR with GRYPE_DB_AUTO_UPDATE=false. Otherwise nothing is
   exported and the scan fetches the DB itself, as it did before this action
-  existed. Saving is left to grype-db-save, after the scan.
+  existed. Saving is left to grype-db-save, after the scan. Tag runs never
+  restore: like the layer cache, a release gate reads nothing a default-branch
+  job wrote, so they download into a directory of their own.
 
 outputs:
   key:
@@ -38,9 +40,12 @@ runs:
           echo "::warning::could not read $listing; the scan fetches the Grype DB itself"
         fi
 
+    # The check below compares the DB's own import metadata with the listing,
+    # which a DB written into the cache by any default-branch job can fake.
+    # Good enough for a PR or push scan; a tag's scan is the release gate.
     - name: Restore Grype DB
       id: restore
-      if: ${{ steps.key.outputs.path != '' }}
+      if: ${{ steps.key.outputs.path != '' && !startsWith(github.ref, 'refs/tags/') }}
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ~/.cache/grype-db
@@ -67,13 +72,16 @@ runs:
       run: |
         [ -n "$GRYPE" ] || { echo "::warning::grype is not installed; the scan fetches the DB itself"; exit 0; }
         export GRYPE_DB_CACHE_DIR="$HOME/.cache/grype-db"
+        # RUNNER_TEMP is emptied per job, so a tag run downloads even on a
+        # self-hosted runner whose home outlives the job. Nothing saves it.
+        [[ $GITHUB_REF != refs/tags/* ]] || GRYPE_DB_CACHE_DIR="$RUNNER_TEMP/grype-db"
         save=false
         if [ "$EXACT_HIT" != true ]; then
           if ! "$GRYPE" db update; then
             echo "::warning::grype db update failed; the scan fetches the DB itself"
             exit 0
           fi
-          save=true
+          [[ $GITHUB_REF == refs/tags/* ]] || save=true
         fi
         from=
         if status=$("$GRYPE" db status -o json); then

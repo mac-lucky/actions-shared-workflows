@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Loads the Grype DB from the LAN copy that forgejo-fleet-ops' scan-ghcr
-# publishes nightly, so Forgejo builds stop downloading it from Anchore.
+# publishes daily after Anchore's DB build, so Forgejo builds stop downloading
+# it from Anchore.
 # Fetched from master by raw URL; never fails the job.
 #
 # The copy is the Forgejo generic package mac-lucky/grype-db-v6, one version
