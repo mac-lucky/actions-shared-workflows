@@ -3,9 +3,10 @@ name: Reusable Auto Tag Workflow
 
 # Creates the release tag the CI/CD reusables publish from. Callers run this on
 # pushes to their default branch (usually with a paths: filter); the tag push
-# then triggers the caller's own release build. TAG_PUSH_TOKEN must be a PAT:
-# refs pushed with github.token do not trigger workflows, so the release build
-# would never start.
+# then triggers the caller's own release build. Refs pushed with github.token
+# do not trigger workflows, so the tag is pushed with a GitHub App installation
+# token (CI_APP_CLIENT_ID + CI_APP_PRIVATE_KEY) or, for a caller without the
+# App, a PAT (TAG_PUSH_TOKEN). The App wins when both are set.
 
 on:
   workflow_call:
@@ -29,9 +30,15 @@ on:
         type: string
         default: './Dockerfile'
     secrets:
+      CI_APP_CLIENT_ID:
+        description: 'Client ID of a GitHub App installed on the caller with Contents and Workflows read and write'
+        required: false
+      CI_APP_PRIVATE_KEY:
+        description: 'Private key (PEM) of that App'
+        required: false
       TAG_PUSH_TOKEN:
-        description: 'PAT with repo scope, used to push the tag so it triggers workflows'
-        required: true
+        description: 'PAT with repo scope, used when the App secrets are not set'
+        required: false
 
 permissions:
   contents: read
@@ -42,24 +49,48 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # An unset caller secret passes the required:true declaration as an empty
-      # string and then fails inside checkout with an unhelpful message; fail
-      # first with one that says what to do.
-      - name: Require TAG_PUSH_TOKEN
+      # An unset caller secret arrives as an empty string and would fail
+      # inside checkout with an unhelpful message; fail first with one that
+      # says what to set.
+      - name: Pick the push credential
+        id: credential
         env:
+          APP_ID: ${{ secrets.CI_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
           TOKEN: ${{ secrets.TAG_PUSH_TOKEN }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::TAG_PUSH_TOKEN is empty - add a repo-scoped PAT as the TAG_PUSH_TOKEN Actions secret in this repository"
+          if [ -n "$APP_ID" ] && [ -n "$APP_KEY" ]; then
+            echo "Pushing with a GitHub App installation token"
+            echo "use=app" >> "$GITHUB_OUTPUT"
+          elif [ -n "$APP_ID" ] || [ -n "$APP_KEY" ]; then
+            echo "::error::CI_APP_CLIENT_ID and CI_APP_PRIVATE_KEY go together, and one of them is empty in this repository"
+            exit 1
+          elif [ -n "$TOKEN" ]; then
+            echo "Pushing with TAG_PUSH_TOKEN"
+            echo "use=pat" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::no push credential - add CI_APP_CLIENT_ID and CI_APP_PRIVATE_KEY (a GitHub App installed on this repository) or TAG_PUSH_TOKEN (a repo-scoped PAT) as Actions secrets in this repository"
             exit 1
           fi
 
+      - name: App token
+        id: app
+        if: steps.credential.outputs.use == 'app'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          permission-contents: write
+          # GitHub refuses an App's tag push when the tagged commit changed a
+          # workflow file, unless the token may write workflows.
+          permission-workflows: write
+
       - name: Checkout code
-        # zizmor: ignore[artipacked] the tag push below authenticates with this persisted PAT
+        # zizmor: ignore[artipacked] the tag push below authenticates with this persisted token
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.TAG_PUSH_TOKEN }}
+          token: ${{ steps.app.outputs.token || secrets.TAG_PUSH_TOKEN }}
 
       - name: Compute and push tag
         env:
