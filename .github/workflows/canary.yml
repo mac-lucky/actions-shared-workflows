@@ -84,15 +84,15 @@ jobs:
             echo "No pin this caller uses changed."
           fi
 
-      # Two callers are private. Without the PAT the checkout 404s and the leg
-      # goes red, which is the point: a skipped caller is an untested one.
+      # Every caller is public, so the job token checks it out. One made private
+      # 404s here and the leg goes red, which is the point: a skipped caller is
+      # an untested one.
       - name: Checkout caller
         if: steps.pins.outputs.changed == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: mac-lucky/${{ matrix.caller }}
           path: caller
-          token: ${{ secrets.CANARY_REPO_TOKEN || github.token }}
           persist-credentials: false
 
       # Same resolution as go-cicd-reusable: the go.mod minor, newest patch.
