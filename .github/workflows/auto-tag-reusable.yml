@@ -81,8 +81,9 @@ jobs:
           client-id: ${{ secrets.CI_APP_CLIENT_ID }}
           private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
           permission-contents: write
-          # GitHub refuses an App's tag push when the tagged commit changed a
-          # workflow file, unless the token may write workflows.
+          # GitHub can refuse an App's tag push over the workflow files the
+          # tagged commit carries (say, master moved on with a workflow change)
+          # unless the token may write workflows.
           permission-workflows: write
 
       - name: Checkout code
