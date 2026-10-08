@@ -189,6 +189,10 @@ jobs:
           # is fine: on a tag this image is only smoke-tested, and the build
           # job's per-arch scan is the gate.
           cache-to: ${{ !startsWith(github.ref, 'refs/tags/') && format('type=gha,scope=build-linux-amd64,mode={0}', github.event_name == 'pull_request' && 'min' || 'max') || '' }}
+          # New on every run, so a Dockerfile that declares ARG PKG_REFRESH right
+          # before its final stage's apk/apt RUN never restores that layer from
+          # the cache.
+          build-args: PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
 
       # Compiling govulncheck from source takes minutes; keyed on the pinned
       # version so a bump installs fresh.
@@ -410,6 +414,8 @@ jobs:
           # more than once. The fresh layers land in the cache above, so the
           # push build below still picks them up.
           no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
+          # Same value in the scan and push builds: the push reuses the scanned layers.
+          build-args: PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
 
       # Build the effective Grype config; same logic as the test job. Runs per
       # arch because the arm64 image is a different artifact. No govulncheck
@@ -506,6 +512,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE_GHCR }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          # Same value in the scan and push builds: the push reuses the scanned layers.
+          build-args: PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Export digest
         env:

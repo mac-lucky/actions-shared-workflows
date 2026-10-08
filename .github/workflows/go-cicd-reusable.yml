@@ -564,6 +564,7 @@ jobs:
           push: false
           load: true
           build-args: |
+            PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             GO_VERSION=${{ needs.setup.outputs.go-version }}
 
       - name: Save container image
@@ -620,6 +621,7 @@ jobs:
           cache-to: type=gha,scope=build-linux-arm64,mode=max
           push: false
           build-args: |
+            PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             GO_VERSION=${{ needs.setup.outputs.go-version }}
 
   # Job 5: Container Integration Tests
@@ -905,6 +907,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             GO_VERSION=${{ needs.setup.outputs.go-version }}
             VERSION=${{ env.NEW_VERSION }}
             COMMIT_SHA=${{ github.sha }}
@@ -977,6 +980,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             GO_VERSION=${{ needs.setup.outputs.go-version }}
             VERSION=${{ env.NEW_VERSION }}
             COMMIT_SHA=${{ github.sha }}

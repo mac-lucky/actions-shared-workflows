@@ -376,6 +376,10 @@ jobs:
           cache-to: type=gha,scope=build-linux-amd64,mode=${{ github.event_name == 'pull_request' && 'min' || 'max' }}
           push: false
           load: true
+          # New on every run, so a Dockerfile that declares ARG PKG_REFRESH right
+          # before its final stage's apk/apt RUN never restores that layer from
+          # the cache.
+          build-args: PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Save container image
         if: ${{ inputs.enable_container_tests }}
@@ -430,6 +434,7 @@ jobs:
           cache-to: type=gha,scope=build-linux-arm64,mode=max
           push: false
           build-args: |
+            PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             NODE_VERSION=${{ needs.setup.outputs.node-version }}
 
   # Job 5: Container Integration Tests
@@ -562,6 +567,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             NODE_VERSION=${{ needs.setup.outputs.node-version }}
             VERSION=${{ env.NEW_VERSION }}
             COMMIT_SHA=${{ github.sha }}
@@ -626,6 +632,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            PKG_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             NODE_VERSION=${{ needs.setup.outputs.node-version }}
             VERSION=${{ env.NEW_VERSION }}
             COMMIT_SHA=${{ github.sha }}
