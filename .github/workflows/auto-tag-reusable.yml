@@ -29,6 +29,16 @@ on:
         required: false
         type: string
         default: './Dockerfile'
+      tag_prefix:
+        description: >-
+          Prefix of the tags this caller cuts, for a monorepo that versions
+          each image on its own (pushward-integrations: `github/`). patch mode
+          then bumps the newest `<prefix>v*` tag and cuts `<prefix>v0.1.0`
+          when there is none; upstream-arg tags `<prefix>v<value>`. Lowercase
+          letters, digits and dashes, ending in a slash.
+        required: false
+        type: string
+        default: ''
     secrets:
       CI_APP_CLIENT_ID:
         description: 'Client ID of a GitHub App installed on the caller with Contents and Workflows read and write'
@@ -98,8 +108,15 @@ jobs:
           MODE: ${{ inputs.mode }}
           ARG_NAME: ${{ inputs.arg_name }}
           DOCKERFILE: ${{ inputs.dockerfile_path }}
+          PREFIX: ${{ inputs.tag_prefix }}
         run: |
           set -euo pipefail
+          # The prefix goes into a grep pattern and a ref name below, so only
+          # characters that mean nothing to either get through.
+          if [ -n "$PREFIX" ] && ! [[ "$PREFIX" =~ ^[a-z0-9][a-z0-9-]*/$ ]]; then
+            echo "tag_prefix '$PREFIX' must be lowercase letters, digits and dashes ending in a slash"
+            exit 1
+          fi
           case "$MODE" in
             upstream-arg)
               if [ -z "$ARG_NAME" ]; then
@@ -111,7 +128,7 @@ jobs:
                 echo "ARG ${ARG_NAME} not found in ${DOCKERFILE}"
                 exit 1
               fi
-              BASE="v${RAW#v}"
+              BASE="${PREFIX}v${RAW#v}"
               if ! git rev-parse -q --verify "refs/tags/${BASE}" > /dev/null; then
                 TAG="$BASE"
               else
@@ -122,11 +139,12 @@ jobs:
               fi
               ;;
             patch)
-              LAST=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+              LAST=$(git tag --list "${PREFIX}v*" | grep -E "^${PREFIX}v[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n1 || true)
               if [ -z "$LAST" ]; then
-                TAG="v0.1.0"
+                TAG="${PREFIX}v0.1.0"
               else
-                TAG=$(echo "${LAST#v}" | awk -F. -v OFS=. '{$3++; print "v"$0}')
+                LAST="${LAST#"$PREFIX"}"
+                TAG="${PREFIX}$(echo "${LAST#v}" | awk -F. -v OFS=. '{$3++; print "v"$0}')"
               fi
               ;;
             *)
