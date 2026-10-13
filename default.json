@@ -142,6 +142,7 @@
         "go",
         "golang",
         "golang/go",
+        "actions/go-versions",
         "docker.io/golang",
         "docker.io/library/golang",
         "library/golang"
