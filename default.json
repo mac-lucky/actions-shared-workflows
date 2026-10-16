@@ -65,6 +65,15 @@
     },
     {
       "customType": "regex",
+      "description": "go-cicd's postgres_image input in a caller workflow: the test job's Postgres service, pinned as tag@sha256",
+      "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "postgres_image: [\"']?(?<depName>[a-z0-9./-]+/postgres):(?<currentValue>[^\"'\\s@]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
       "managerFilePatterns": ["/^\\.(github|forgejo)/workflows/python-cicd-reusable\\.yml$/"],
       "matchStrings": [
         "python_image:\\n(?:[ ]+[a-z_]+:.*\\n)*?[ ]+default: [\"']?(?<depName>[a-z0-9./-]+/python):(?<currentValue>[^\"'\\s@]+)"
