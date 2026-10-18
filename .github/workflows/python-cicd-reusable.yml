@@ -142,6 +142,7 @@ on:
       # Ruff gates the build, so its version decides what "clean" means, and its
       # default rule set grows between releases (0.16 enables 413). Callers with no
       # [tool.ruff.lint] select inherit that, so floating it would red them all.
+      # canary.yml runs a new pin over every caller before that PR can merge.
       ruff_version:
         description: 'Ruff version to lint and format-check with'
         required: false

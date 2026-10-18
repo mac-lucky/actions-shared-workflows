@@ -180,15 +180,40 @@
       "automerge": true
     },
     {
-      "description": "ruff decides what clean means for every python caller (its default rule set grows between releases) and no canary covers them, so the python tool pins get their own PR and wait for a person to re-run ruff over the callers. bandit and the job image ride along",
+      "description": "ruff decides what clean means for every python caller (its default rule set grows between releases), so its pin gets its own PR instead of riding the batch. The GitHub canary (canary.yml + scripts/canary.sh) runs the old and the new ruff over every python caller and goes red when the new one fails where the old one passes, the same gate as the Go analysis tools, so green automerges and red waits for a person. bandit rides along without a canary leg: its findings are advisory in both reusables, though a release that fails to install still fails its job",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": [".github/workflows/python-cicd-reusable.yml"],
+      "matchDepNames": ["ruff", "bandit"],
+      "groupName": "python analysis tools",
+      "groupSlug": "python-analysis-tools",
+      "automerge": true
+    },
+    {
+      "description": "The same pins in the Forgejo python-cicd wait for a person: python-cicd has no caller on that forge, so no Forgejo canary leg runs ruff and a green PR there has not linted anything with the new version",
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": [".forgejo/workflows/python-cicd-reusable.yml"],
+      "matchDepNames": ["ruff", "bandit"],
+      "groupName": "python analysis tools",
+      "groupSlug": "python-analysis-tools",
+      "automerge": false
+    },
+    {
+      "description": "Majors never automerge, canary or not: a new major of ruff or bandit waits for a person on both forges",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["ruff", "bandit"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "The python job image is the runtime every python caller's analysis and tests run in, so a bump changes what they are tested on. No canary runs it, so it gets its own PR and waits for a person",
       "matchManagers": ["custom.regex"],
       "matchFileNames": [
         ".github/workflows/python-cicd-reusable.yml",
         ".forgejo/workflows/python-cicd-reusable.yml"
       ],
-      "matchDepNames": ["ruff", "bandit", "docker.io/library/python"],
-      "groupName": "python analysis tools",
-      "groupSlug": "python-analysis-tools",
+      "matchDepNames": ["docker.io/library/python"],
+      "groupName": "python job image",
+      "groupSlug": "python-job-image",
       "automerge": false
     },
     {
@@ -219,6 +244,12 @@
       "description": "Majors stay manual and get the major label. The dependency dashboard is off, so the open PRs are the only list: search both forges for that label",
       "matchUpdateTypes": ["major"],
       "labels": ["major"]
+    },
+    {
+      "description": "No Postgres majors. The CI test databases (go-cicd postgres_image, rust-cicd's service) follow the production CloudNativePG major (pushward-db and dipwatch on 17, cost-analyzer on 16), so their bump moves in the same change as the cluster, by hand. The rule also covers every compose file. A repo that wants its own major PRs opts back in with `enabled: true` on its own postgres-major rule (dipwatch, and unraid-stacks for Forgejo's database)",
+      "matchDepNames": ["postgres", "**/postgres"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
     },
     {
       "description": "Callers ride the shared workflows at @master (Forgejo: @main) by design; never pin or update those refs. The Forgejo one also has to be here because Renovate reads a .forgejo/workflows `uses:` as a github-actions dep and looks the repo up on github.com, where it does not exist",

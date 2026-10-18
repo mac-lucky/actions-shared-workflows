@@ -1,19 +1,21 @@
 name: Canary
 
-# The reusables pin golangci-lint, staticcheck, govulncheck and gosec as input
-# defaults, and every caller rides @master: a merged bump is what the whole
-# fleet lints with on its next run. A `uses:` ref cannot point at a PR branch,
-# so nothing in a caller can try the new pin first. This workflow does it from
-# here: when a PR changes a pin, each leg checks out one caller and runs the
-# old and the new version over it (scripts/canary.sh). New fails where old
-# passes = regression = red. A PR that touches no pin passes in seconds, so
-# `All checks passed` can be a required check and the Renovate group
-# `go analysis tools` can automerge behind it.
+# The reusables pin golangci-lint, staticcheck, govulncheck, gosec and ruff as
+# input defaults, and every caller rides @master: a merged bump is what the
+# whole fleet lints with on its next run. A `uses:` ref cannot point at a PR
+# branch, so nothing in a caller can try the new pin first. This workflow does
+# it from here: when a PR changes a pin, each leg checks out one caller and
+# runs the old and the new version over it (scripts/canary.sh). New fails
+# where old passes = regression = red. A PR that touches no pin passes in
+# seconds, so `All checks passed` can be a required check and the Renovate
+# groups `go analysis tools` and `python analysis tools` can automerge behind
+# it.
 #
 # The matrix is static on purpose: leg names are status-check contexts.
 # Adding a Go caller to the fleet means adding a leg here, with the tools its
 # workflow actually runs (its code_analysis_tools input, plus golangci-lint if
-# it calls golangci-lint-reusable).
+# it calls golangci-lint-reusable). A python-cicd caller with code analysis on
+# gets a leg too, with `tools: ruff` and its build_context as the module.
 
 on:
   pull_request:
@@ -58,6 +60,15 @@ jobs:
           - caller: pushward-cli
             tools: staticcheck govulncheck gosec
             modules: .
+          # Selects its own ruff rules in pyproject.toml.
+          - caller: bambulab-timelapse-downloader
+            tools: ruff
+            modules: .
+          # No ruff config: it lints with ruff's default rule set, which is
+          # what grows between releases.
+          - caller: bazarr-auto-translate
+            tools: ruff
+            modules: .
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -78,6 +89,10 @@ jobs:
           done < /tmp/all-pins
           if [ -s /tmp/pins ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            # Which toolchain the changed pins need: ruff runs through uv,
+            # every other tool through Go.
+            if grep -q '^ruff ' /tmp/pins; then echo "uv=true" >> "$GITHUB_OUTPUT"; fi
+            if grep -qv '^ruff ' /tmp/pins; then echo "go=true" >> "$GITHUB_OUTPUT"; fi
             cat /tmp/pins
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -95,30 +110,47 @@ jobs:
           path: caller
           persist-credentials: false
 
+      # ruff and golangci-lint look for config in every parent directory, and
+      # here the parent is this repo's checkout. Production checks the caller
+      # out at the workspace root with no repo above it; moving it out of this
+      # workspace matches that.
+      - name: Move the caller out of the workspace
+        if: steps.pins.outputs.changed == 'true'
+        run: mv caller "$RUNNER_TEMP/caller"
+
       # Same resolution as go-cicd-reusable: the go.mod minor, newest patch.
       - name: Go version of the caller
-        if: steps.pins.outputs.changed == 'true'
+        if: steps.pins.outputs.go == 'true'
         id: go
         env:
           MODULES: ${{ matrix.modules }}
         run: |
-          full="$(grep '^go ' "caller/${MODULES%% *}/go.mod" | cut -d' ' -f2)"
+          full="$(grep '^go ' "$RUNNER_TEMP/caller/${MODULES%% *}/go.mod" | cut -d' ' -f2)"
           echo "version=$(echo "$full" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
-        if: steps.pins.outputs.changed == 'true'
+        if: steps.pins.outputs.go == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ steps.go.outputs.version }}
           check-latest: true
           cache: false
 
+      # Same uv as python-cicd-reusable's code-analysis job; canary.sh then
+      # installs each ruff with `uv tool install`, as that job does.
+      - name: Install uv
+        if: steps.pins.outputs.uv == 'true'
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "latest"
+          enable-cache: false
+
       - name: Run old and new over the caller
         if: steps.pins.outputs.changed == 'true'
         env:
           TOOLS: ${{ matrix.tools }}
           MODULES: ${{ matrix.modules }}
-        run: scripts/canary.sh run caller /tmp/pins
+        run: scripts/canary.sh run "$RUNNER_TEMP/caller" /tmp/pins
 
   # The release notes every caller's release job writes: notes.sh and
   # cliff.toml against a fixture repo with a known expected output, with the

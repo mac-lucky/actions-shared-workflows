@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Caller canary for the Go analysis tool pins.
+# Caller canary for the analysis tool pins.
 #
-# The reusables pin golangci-lint, staticcheck, govulncheck and gosec as input
-# defaults, and every caller inherits a new default the moment it merges. This
-# script runs a changed pin against a real caller before that happens.
+# The reusables pin golangci-lint, staticcheck, govulncheck, gosec and ruff as
+# input defaults, and every caller inherits a new default the moment it merges.
+# This script runs a changed pin against a real caller before that happens.
 #
 #   canary.sh pins <base-ref> <workflows-dir>
 #       Prints "<tool> <old> <new>" for every pin that differs between
@@ -14,11 +14,16 @@
 #       the new version over each module in $MODULES. A failure is only a
 #       regression if the old version passes on the same tree: govulncheck
 #       findings follow the vulnerability database, not the binary, and a
-#       caller that is already red must not block an unrelated bump.
+#       caller that is already red must not block an unrelated bump. ruff is
+#       two gates, lint and format, as in python-cicd's matrix, and each one is
+#       compared on its own.
 #
 # Environment for `run`:
-#   TOOLS     space-separated subset of: staticcheck govulncheck gosec golangci-lint
-#   MODULES   space-separated module directories inside the caller (default ".")
+#   TOOLS     space-separated subset of: staticcheck govulncheck gosec golangci-lint ruff
+#   MODULES   space-separated module directories inside the caller (default ".");
+#             for ruff, the build_context the caller passes to python-cicd
+#
+# ruff installs through uv, so a leg that runs it needs uv on PATH.
 #
 # The same file lives in actions-shared-workflows and forgejo-shared-workflows.
 set -euo pipefail
@@ -54,6 +59,7 @@ staticcheck staticcheck_version go-cicd-reusable.yml
 govulncheck govulncheck_version go-cicd-reusable.yml
 gosec gosec_version go-cicd-reusable.yml
 golangci-lint golangci_lint_version golangci-lint-reusable.yml
+ruff ruff_version python-cicd-reusable.yml
 EOF
   # docker-cicd carries its own govulncheck pin as a workflow env.
   if [ -f "$dir/docker-cicd-reusable.yml" ]; then
@@ -78,13 +84,32 @@ install_tool() {
       curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$version/install.sh" \
         | sh -s -- -b "$dir" "$version" >/dev/null
       ;;
+    ruff)
+      # The reusables' install (uv tool install ruff==<version>), with its own
+      # tool and bin dir so the old and the new version sit side by side.
+      UV_TOOL_DIR="$dir/tools" UV_TOOL_BIN_DIR="$dir" uv tool install -q "ruff==$version"
+      # Old against new means nothing if the binary is not the pin it was
+      # installed for.
+      local got
+      got="$("$dir/ruff" --version)"
+      [ "$got" = "ruff $version" ] || { echo "ruff==$version installed $got" >&2; exit 1; }
+      ;;
     *) echo "unknown tool: $tool" >&2; exit 1 ;;
   esac
 }
 
+checks_of() {
+  # $1 = tool. The gates one pin decides: ruff is two, so a format regression
+  # is not hidden by a lint failure the old version shares.
+  case "$1" in
+    ruff) echo ruff-lint ruff-format ;;
+    *) echo "$1" ;;
+  esac
+}
+
 run_tool() {
-  # $1 = tool, $2 = bin dir. Runs in the current directory (a module root) with
-  # the arguments the reusables pass.
+  # $1 = check (see checks_of), $2 = bin dir. Runs in the current directory (a
+  # module root) with the arguments the reusables pass.
   case "$1" in
     staticcheck) "$2/staticcheck" ./... ;;
     govulncheck) "$2/govulncheck" ./... ;;
@@ -97,12 +122,19 @@ run_tool() {
       "$2/govulncheck" -mode binary -format openvex /tmp/canary-bin > /tmp/canary.vex.json
       [ -s /tmp/canary.vex.json ]
       ;;
+    ruff-lint) "$2/ruff" check . --output-format=concise ;;
+    ruff-format) "$2/ruff" format --check . ;;
   esac
 }
 
 cmd_run() {
   local src="$1" pins="$2" tools=" ${TOOLS:-} " modules="${MODULES:-.}"
-  local work tool old new module regressions=0 ran=0
+  local work tool old new module check regressions=0 ran=0
+  # A missing module fails on both versions, which reads as "not caused by the
+  # bump" and passes.
+  for module in $modules; do
+    [ -d "$src/$module" ] || { echo "::error::$module is not a directory in $src"; exit 1; }
+  done
   work="$(mktemp -d)"
   while read -r tool old new; do
     [ -n "$tool" ] || continue
@@ -112,23 +144,25 @@ cmd_run() {
     install_tool "$tool" "$old" "$work/old-$tool"
     echo "::endgroup::"
     for module in $modules; do
-      ran=$((ran + 1))
-      echo "::group::$tool $new in $module"
-      if (cd "$src/$module" && run_tool "$tool" "$work/new-$tool"); then
+      for check in $(checks_of "$tool"); do
+        ran=$((ran + 1))
+        echo "::group::$check $new in $module"
+        if (cd "$src/$module" && run_tool "$check" "$work/new-$tool"); then
+          echo "::endgroup::"
+          echo "ok: $check $new passes in $module"
+          continue
+        fi
         echo "::endgroup::"
-        echo "ok: $tool $new passes in $module"
-        continue
-      fi
-      echo "::endgroup::"
-      echo "::group::$tool $old in $module (baseline)"
-      if (cd "$src/$module" && run_tool "$tool" "$work/old-$tool"); then
-        echo "::endgroup::"
-        echo "::error::$tool $new fails in $module where $old passes"
-        regressions=$((regressions + 1))
-      else
-        echo "::endgroup::"
-        echo "::warning::$tool fails in $module on $old as well; not caused by the bump"
-      fi
+        echo "::group::$check $old in $module (baseline)"
+        if (cd "$src/$module" && run_tool "$check" "$work/old-$tool"); then
+          echo "::endgroup::"
+          echo "::error::$check $new fails in $module where $old passes"
+          regressions=$((regressions + 1))
+        else
+          echo "::endgroup::"
+          echo "::warning::$check fails in $module on $old as well; not caused by the bump"
+        fi
+      done
     done
   done < "$pins"
   echo "canary: $ran run(s), $regressions regression(s)"
