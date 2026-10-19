@@ -246,7 +246,7 @@
       "labels": ["major"]
     },
     {
-      "description": "No Postgres majors. The CI test databases (go-cicd postgres_image, rust-cicd's service) follow the production CloudNativePG major (pushward-db and dipwatch on 17, cost-analyzer on 16), so their bump moves in the same change as the cluster, by hand. The rule also covers every compose file. A repo that wants its own major PRs opts back in with `enabled: true` on its own postgres-major rule (dipwatch, and unraid-stacks for Forgejo's database)",
+      "description": "No Postgres majors. The CI test databases (go-cicd postgres_image, rust-cicd's service) follow the production CloudNativePG major (pushward-db on 17, cost-analyzer on 16), so their bump moves in the same change as the cluster, by hand. The rule also covers every compose file. A repo that wants its own major PRs opts back in with `enabled: true` on its own postgres-major rule (unraid-stacks, for Forgejo's database)",
       "matchDepNames": ["postgres", "**/postgres"],
       "matchUpdateTypes": ["major"],
       "enabled": false
