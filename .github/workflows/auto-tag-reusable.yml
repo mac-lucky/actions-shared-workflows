@@ -109,6 +109,7 @@ jobs:
           ARG_NAME: ${{ inputs.arg_name }}
           DOCKERFILE: ${{ inputs.dockerfile_path }}
           PREFIX: ${{ inputs.tag_prefix }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # The prefix goes into a grep pattern and a ref name below, so only
@@ -119,9 +120,10 @@ jobs:
           fi
           # A commit that already carries this prefix's release tag (a minor or
           # major cut by hand, pushed with or before the branch) is released:
-          # another tag would publish the same build twice.
+          # another tag would publish the same build twice. A dispatch is a
+          # rebuild request (scan-ghcr's, or by hand), so it tags anyway.
           TAGGED=$(git tag --points-at HEAD --list "${PREFIX}v*" | head -n1)
-          if [ -n "$TAGGED" ]; then
+          if [ -n "$TAGGED" ] && [ "$EVENT" != "workflow_dispatch" ]; then
             echo "HEAD already carries ${TAGGED}; nothing to do"
             exit 0
           fi
