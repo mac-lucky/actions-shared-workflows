@@ -140,7 +140,8 @@
         "ghcr.io/mac-lucky/**",
         "maclucky/**",
         "docker.io/maclucky/**",
-        "mac-lucky/**"
+        "mac-lucky/**",
+        "@mac-lucky/**"
       ],
       "minimumReleaseAge": null
     },
