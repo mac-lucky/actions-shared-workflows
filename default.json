@@ -141,7 +141,7 @@
         "maclucky/**",
         "docker.io/maclucky/**",
         "mac-lucky/**",
-        "@mac-lucky/**"
+        "@maclucky/**"
       ],
       "minimumReleaseAge": null
     },
