@@ -29,15 +29,6 @@ ignore:
       type: go-module
       location: "/app/derper"
 
-  # bambulab-timelapse-downloader: moviepy hard-pins pillow < 12 so the pillow fix
-  # (12.1.1+) is unreachable; the CPython base image CVEs await a patched release.
-  - package:
-      name: pillow
-      type: python
-  - package:
-      name: python
-      type: binary
-
   # claude-code-docker: kustomize is built from source with the current Go
   # toolchain, but kubectl (release binary) and helm (pins these deps in its own
   # go.mod) carry vendored transitive CVEs we cannot patch downstream until
