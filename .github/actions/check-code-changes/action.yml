@@ -27,6 +27,7 @@ runs:
     - name: Check for code changes
       id: changes
       env:
+        BEFORE_SHA: ${{ github.event.before }}
         DETECT_WORKFLOW_CHANGES: ${{ inputs.detect_workflow_changes }}
         EVENT_NAME: ${{ inputs.event_name }}
         FILE_PATTERNS: ${{ inputs.file_patterns }}
@@ -56,10 +57,27 @@ runs:
 
         # For push events, check if there are changes to code files
         if [ "${EVENT_NAME}" = "push" ]; then
-          # Check if previous commit exists
-          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+          # Diff the whole push, not just its tip: a push whose last commit is
+          # docs-only still carries the code changes of the commits before it.
+          # The checkout is shallow, so the pre-push commit is fetched on its
+          # own. A new branch (all-zero before) or a before that cannot be
+          # fetched (force-pushed away, or a private repo: the checkout keeps no
+          # credentials) falls back to the tip commit's parent.
+          DIFF_BASE=""
+          if [[ "${BEFORE_SHA}" =~ ^[0-9a-f]{40}$ ]] && ! [[ "${BEFORE_SHA}" =~ ^0+$ ]]; then
+            if git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null \
+              || git fetch --quiet --no-tags --depth=1 origin "${BEFORE_SHA}" 2>/dev/null; then
+              DIFF_BASE="${BEFORE_SHA}"
+            else
+              echo "Could not fetch the pre-push commit ${BEFORE_SHA}; diffing against HEAD~1"
+            fi
+          fi
+          if [ -z "${DIFF_BASE}" ] && git rev-parse HEAD~1 >/dev/null 2>&1; then
+            DIFF_BASE="HEAD~1"
+          fi
+          if [ -n "${DIFF_BASE}" ]; then
             # Check for changes in language-specific files
-            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+            CHANGED_FILES=$(git diff --name-only "${DIFF_BASE}" HEAD)
 
             # Look for changes matching the file pattern
             if echo "$CHANGED_FILES" | grep -E "${FILE_PATTERNS}" > /dev/null; then
