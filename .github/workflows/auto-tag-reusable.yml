@@ -118,56 +118,88 @@ jobs:
             echo "tag_prefix '$PREFIX' must be lowercase letters, digits and dashes ending in a slash"
             exit 1
           fi
-          # A commit that already carries this prefix's release tag (a minor or
-          # major cut by hand, pushed with or before the branch) is released:
-          # another tag would publish the same build twice. A dispatch is a
-          # rebuild request (scan-ghcr's, or by hand), so it tags anyway.
-          TAGGED=$(git tag --points-at HEAD --list "${PREFIX}v*" | head -n1)
-          if [ -n "$TAGGED" ] && [ "$EVENT" != "workflow_dispatch" ]; then
-            echo "HEAD already carries ${TAGGED}; nothing to do"
-            exit 0
-          fi
-          case "$MODE" in
-            upstream-arg)
-              if [ -z "$ARG_NAME" ]; then
-                echo "arg_name is required in upstream-arg mode"
+          # docker-cicd's "Compute version from tag" regex (2-4 dotted numerics,
+          # an optional suffix): every upstream-arg caller builds with it, and a
+          # tag it refuses would sit live with no release behind it.
+          is_version() { [[ "$1" =~ ^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z.]+)?$ ]]; }
+          # Sets TAG from the tags in this clone, or exits when there is nothing
+          # to tag. Runs a second time after a rejected push.
+          compute_tag() {
+            # A commit that already carries this prefix's release tag (a minor or
+            # major cut by hand, pushed with or before the branch) is released:
+            # another tag would publish the same build twice. A dispatch is a
+            # rebuild request (scan-ghcr's, or by hand), so it tags anyway.
+            TAGGED=$(git tag --points-at HEAD --list "${PREFIX}v*" | head -n1)
+            if [ -n "$TAGGED" ] && [ "$EVENT" != "workflow_dispatch" ]; then
+              echo "HEAD already carries ${TAGGED}; nothing to do"
+              exit 0
+            fi
+            case "$MODE" in
+              upstream-arg)
+                if [ -z "$ARG_NAME" ]; then
+                  echo "arg_name is required in upstream-arg mode"
+                  exit 1
+                fi
+                RAW=$(grep -oE "^ARG ${ARG_NAME}=\"?[^\" ]+" "$DOCKERFILE" | head -n1 | cut -d= -f2 | tr -d '"' || true)
+                if [ -z "$RAW" ]; then
+                  echo "ARG ${ARG_NAME} not found in ${DOCKERFILE}"
+                  exit 1
+                fi
+                VALUE="${RAW#v}"
+                if ! is_version "$VALUE"; then
+                  echo "::error::ARG ${ARG_NAME}=${RAW} in ${DOCKERFILE} is not a version docker-cicd builds"
+                  exit 1
+                fi
+                BASE="${PREFIX}v${VALUE}"
+                if ! git rev-parse -q --verify "refs/tags/${BASE}" > /dev/null; then
+                  TAG="$BASE"
+                else
+                  # Same upstream version rebuilt (base image bump, Dockerfile
+                  # fix): count up a -rN suffix. Only <base>-r<digits> counts;
+                  # the glob also lists a <base>-rc1, which must never reach the
+                  # arithmetic below.
+                  BASE_RE=$(printf '%s' "$BASE" | sed 's/\./\\./g')
+                  N=$(git tag --list "${BASE}-r*" | sed -nE "s|^${BASE_RE}-r([0-9]+)$|\1|p" | sort -n | tail -n1)
+                  TAG="${BASE}-r$(( ${N:-0} + 1 ))"
+                  if ! is_version "${TAG#"${PREFIX}"v}"; then
+                    echo "::error::rebuild tag ${TAG} is not a version docker-cicd builds (a suffixed upstream version cannot take -rN)"
+                    exit 1
+                  fi
+                fi
+                ;;
+              patch)
+                LAST=$(git tag --list "${PREFIX}v*" | grep -E "^${PREFIX}v[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n1 || true)
+                if [ -z "$LAST" ]; then
+                  TAG="${PREFIX}v0.1.0"
+                else
+                  LAST="${LAST#"$PREFIX"}"
+                  TAG="${PREFIX}$(echo "${LAST#v}" | awk -F. -v OFS=. '{$3++; print "v"$0}')"
+                fi
+                ;;
+              *)
+                echo "Unknown mode: $MODE"
                 exit 1
-              fi
-              RAW=$(grep -oE "^ARG ${ARG_NAME}=\"?[^\" ]+" "$DOCKERFILE" | head -n1 | cut -d= -f2 | tr -d '"' || true)
-              if [ -z "$RAW" ]; then
-                echo "ARG ${ARG_NAME} not found in ${DOCKERFILE}"
-                exit 1
-              fi
-              BASE="${PREFIX}v${RAW#v}"
-              if ! git rev-parse -q --verify "refs/tags/${BASE}" > /dev/null; then
-                TAG="$BASE"
-              else
-                # Same upstream version rebuilt (base image bump, Dockerfile
-                # fix): count up a -rN suffix.
-                N=$(git tag --list "${BASE}-r*" | sed -E 's/^.*-r([0-9]+)$/\1/' | sort -n | tail -n1)
-                TAG="${BASE}-r$(( ${N:-0} + 1 ))"
-              fi
-              ;;
-            patch)
-              LAST=$(git tag --list "${PREFIX}v*" | grep -E "^${PREFIX}v[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n1 || true)
-              if [ -z "$LAST" ]; then
-                TAG="${PREFIX}v0.1.0"
-              else
-                LAST="${LAST#"$PREFIX"}"
-                TAG="${PREFIX}$(echo "${LAST#v}" | awk -F. -v OFS=. '{$3++; print "v"$0}')"
-              fi
-              ;;
-            *)
-              echo "Unknown mode: $MODE"
-              exit 1
-              ;;
-          esac
-          if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null; then
-            echo "Tag ${TAG} already exists; nothing to do"
-            exit 0
-          fi
+                ;;
+            esac
+            if git rev-parse -q --verify "refs/tags/${TAG}" > /dev/null; then
+              echo "Tag ${TAG} already exists; nothing to do"
+              exit 0
+            fi
+          }
+          compute_tag
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "$TAG"
-          git push origin "refs/tags/${TAG}"
+          if ! git push origin "refs/tags/${TAG}"; then
+            # Most often another run (a merge right behind this one, a tag cut
+            # by hand) pushed a tag first: drop ours, take the remote tags into
+            # account and try once more. A push refused for any other reason
+            # fails again below.
+            echo "Push of ${TAG} was rejected; fetching tags and computing again"
+            git tag -d "$TAG" > /dev/null
+            git fetch --quiet --force --tags origin
+            compute_tag
+            git tag -a "$TAG" -m "$TAG"
+            git push origin "refs/tags/${TAG}"
+          fi
           echo "Pushed ${TAG}"
