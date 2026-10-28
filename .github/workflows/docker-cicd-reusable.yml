@@ -396,6 +396,9 @@ jobs:
             echo "Refusing to build: tag '$GITHUB_REF_NAME' is not a version tag."
             exit 1
           fi
+          # BASE_VERSION drops a -rN rebuild suffix. latest moves only when it
+          # has no suffix left: a plain release or its rebuild, never a
+          # prerelease (or a prerelease's rebuild).
           BASE_VERSION=$(printf '%s' "$VERSION" | sed -E 's/-r[0-9]+$//')
           {
             echo "version=$VERSION"
@@ -412,7 +415,7 @@ jobs:
           tags: |
             type=raw,value=${{ env.VERSION }}
             type=raw,value=${{ env.BASE_VERSION }},enable=${{ env.BASE_VERSION != env.VERSION }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(env.BASE_VERSION, '-') }}
 
       # Build this single arch into the local daemon so it can be scanned before
       # anything is pushed. A single-platform build supports load:true (a multi-platform
@@ -610,7 +613,7 @@ jobs:
           tags: |
             type=raw,value=${{ env.VERSION }}
             type=raw,value=${{ env.BASE_VERSION }},enable=${{ env.BASE_VERSION != env.VERSION }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(env.BASE_VERSION, '-') }}
 
       - name: Log in to Docker Hub
         if: ${{ inputs.push_to_dockerhub }}
@@ -641,10 +644,13 @@ jobs:
           if [ "${BASE_VERSION}" != "${VERSION}" ]; then
             EXTRA="-t ${REGISTRY_IMAGE_DOCKERHUB}:${BASE_VERSION}"
           fi
+          case "${BASE_VERSION}" in
+            *-*) ;;  # prerelease never moves latest, matching the GHCR tag set
+            *) EXTRA="${EXTRA} -t ${REGISTRY_IMAGE_DOCKERHUB}:latest" ;;
+          esac
           # shellcheck disable=SC2086
           docker buildx imagetools create \
             -t ${REGISTRY_IMAGE_DOCKERHUB}:${VERSION} \
-            -t ${REGISTRY_IMAGE_DOCKERHUB}:latest \
             $EXTRA \
             $(printf "${REGISTRY_IMAGE_GHCR}@sha256:%s " *)
 
