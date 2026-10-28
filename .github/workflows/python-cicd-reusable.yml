@@ -754,8 +754,10 @@ jobs:
           # push build below still picks them up.
           no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
 
-      # Build the effective Grype config from the org-wide ignore baseline. Fail-safe -
-      # any error here leaves a valid empty config so the scan still runs.
+      # Build the effective Grype config from the org-wide ignore baseline plus the
+      # repo's own .grype-ignore.yaml, merged as docker-cicd does. Fail-safe for the
+      # baseline (unreachable or invalid: the scan still runs, with no exemptions);
+      # a repo file that cannot be merged fails the step instead.
       - name: Prepare Grype policy
         if: ${{ inputs.enable_security_scan }}
         shell: bash
@@ -768,7 +770,36 @@ jobs:
             printf 'ignore: []\n' > ./.grype.yaml
             echo "WARN: org policy unavailable; starting from an empty ignore set"
           fi
-          if ! python3 -c "import yaml; yaml.safe_load(open('./.grype.yaml'))" 2>/dev/null; then
+          # Exemptions for one image stay in its repo, never in the baseline. A bare
+          # list of rules at any indent, or a mapping holding only an `ignore:` list,
+          # goes under the baseline's ignore: (the same merge as docker-cicd and
+          # forgejo-fleet-ops' scan-ghcr).
+          if [ -s ./.grype-ignore.yaml ]; then
+            if python3 - ./.grype.yaml ./.grype-ignore.yaml <<'PY'
+          import sys, yaml
+          base = yaml.safe_load(open(sys.argv[1])) or {}
+          repo = yaml.safe_load(open(sys.argv[2])) or []
+          if isinstance(repo, dict) and set(repo) != {"ignore"}:
+              sys.exit("a mapping may hold only an ignore: key")
+          rules = repo["ignore"] if isinstance(repo, dict) else repo
+          if not isinstance(rules, list) or not all(isinstance(r, dict) for r in rules):
+              sys.exit("expected a list of ignore rules")
+          base["ignore"] = (base.get("ignore") or []) + rules
+          yaml.safe_dump(base, open(sys.argv[1], "w"), sort_keys=False)
+          PY
+            then
+              echo "Merged repo-local .grype-ignore.yaml"
+            else
+              echo "::error file=.grype-ignore.yaml::could not be merged into the Grype policy (see the error above); it must be a list of ignore rules or a mapping with only an ignore: list"
+              exit 1
+            fi
+          fi
+          if ! python3 -c "import yaml; yaml.safe_load(open('./.grype.yaml'))"; then
+            if [ -s ./.grype-ignore.yaml ]; then
+              echo "::error::the Grype policy with .grype-ignore.yaml merged in is not valid YAML"
+              exit 1
+            fi
+            echo "WARN: org policy is invalid; resetting to empty ignore set"
             printf 'ignore: []\n' > ./.grype.yaml
           fi
           echo "----- effective .grype.yaml -----"
