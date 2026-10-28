@@ -125,13 +125,15 @@ jobs:
           # Sets TAG from the tags in this clone, or exits when there is nothing
           # to tag. Runs a second time after a rejected push.
           compute_tag() {
-            # A commit that already carries this prefix's release tag (a minor or
-            # major cut by hand, pushed with or before the branch) is released:
-            # another tag would publish the same build twice. A dispatch is a
-            # rebuild request (scan-ghcr's, or by hand), so it tags anyway.
-            TAGGED=$(git tag --points-at HEAD --list "${PREFIX}v*" | head -n1)
+            # A commit that a release tag of this prefix already contains (a minor
+            # or major cut by hand, pushed with or before the branch, or a newer
+            # commit's run that tagged first) is released: another tag would
+            # publish the same or older code again and move latest back to it.
+            # A dispatch is a rebuild request (scan-ghcr's, or by hand), so it
+            # tags anyway.
+            TAGGED=$(git tag --contains HEAD --list "${PREFIX}v*" | head -n1)
             if [ -n "$TAGGED" ] && [ "$EVENT" != "workflow_dispatch" ]; then
-              echo "HEAD already carries ${TAGGED}; nothing to do"
+              echo "HEAD is already released by ${TAGGED}; nothing to do"
               exit 0
             fi
             case "$MODE" in
