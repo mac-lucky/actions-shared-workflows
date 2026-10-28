@@ -64,6 +64,25 @@ jobs:
           RENOVATE_VERSION: 44.181.9
         run: bunx -p "renovate@${RENOVATE_VERSION}" renovate-config-validator --strict --no-global default.json manual-merge.json
 
+      # Every image built on either forge reads the org baseline, so a rule
+      # without an exact location un-gates the same package (or a glob's
+      # paths) in all of them. Per-image exemptions go in that repo's
+      # .grype-ignore.yaml.
+      - name: Check the Grype baseline is location-scoped
+        run: |
+          python3 - security/grype-base-policy.yaml <<'PY'
+          import sys, yaml
+          rules = (yaml.safe_load(open(sys.argv[1])) or {}).get("ignore") or []
+          bad = 0
+          for rule in rules:
+              location = str((rule.get("package") or {}).get("location") or "")
+              if not location or any(c in location for c in "*?[{"):
+                  print(f"::error file={sys.argv[1]}::needs an exact package.location: {rule}")
+                  bad += 1
+          print(f"{len(rules)} rules, {bad} without an exact location")
+          sys.exit(1 if bad else 0)
+          PY
+
   shellcheck:
     name: shellcheck action scripts
     runs-on: ubuntu-latest
