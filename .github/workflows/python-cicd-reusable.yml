@@ -764,7 +764,7 @@ jobs:
         run: |
           set +e
           POLICY_URL="https://raw.githubusercontent.com/mac-lucky/actions-shared-workflows/master/security/grype-base-policy.yaml"
-          if curl -sSfL "$POLICY_URL" -o ./.grype.yaml && [ -s ./.grype.yaml ]; then
+          if curl -sSfL --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 "$POLICY_URL" -o ./.grype.yaml && [ -s ./.grype.yaml ]; then
             echo "Loaded org Grype baseline policy"
           else
             printf 'ignore: []\n' > ./.grype.yaml
