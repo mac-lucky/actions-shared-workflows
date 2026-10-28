@@ -129,9 +129,10 @@ jobs:
             # or major cut by hand, pushed with or before the branch, or a newer
             # commit's run that tagged first) is released: another tag would
             # publish the same or older code again and move latest back to it.
-            # A dispatch is a rebuild request (scan-ghcr's, or by hand), so it
-            # tags anyway.
-            TAGGED=$(git tag --contains HEAD --list "${PREFIX}v*" | head -n1)
+            # Only v<version> and v<version>-rN count, so a test tag such as
+            # v0.0.0-test releases nothing. A dispatch is a rebuild request
+            # (scan-ghcr's, or by hand), so it tags anyway.
+            TAGGED=$(git tag --contains HEAD --list "${PREFIX}v*" | grep -E "^${PREFIX}v[0-9]+(\.[0-9]+){1,3}(-r[0-9]+)?$" | head -n1 || true)
             if [ -n "$TAGGED" ] && [ "$EVENT" != "workflow_dispatch" ]; then
               echo "HEAD is already released by ${TAGGED}; nothing to do"
               exit 0
@@ -198,8 +199,16 @@ jobs:
             # account and try once more. A push refused for any other reason
             # fails again below.
             echo "Push of ${TAG} was rejected; fetching tags and computing again"
+            ORIG="$TAG"
             git tag -d "$TAG" > /dev/null
             git fetch --quiet --force --tags origin
+            # The push can land and still report an error. The tag is then on
+            # the remote at HEAD, and a dispatch, which skips compute_tag's
+            # release check, would tag the same commit a second time.
+            if [ "$(git rev-parse -q --verify "refs/tags/${ORIG}^{commit}" || true)" = "$(git rev-parse HEAD)" ]; then
+              echo "Pushed ${ORIG}"
+              exit 0
+            fi
             compute_tag
             git tag -a "$TAG" -m "$TAG"
             git push origin "refs/tags/${TAG}"
