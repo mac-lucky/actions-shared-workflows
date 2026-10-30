@@ -171,7 +171,7 @@ on:
         description: 'gosec version to install. A master pseudo-version until a gosec release reads Go 1.27 export data (v2.29.0 cannot); Renovate moves it to the next tag.'
         required: false
         type: string
-        default: 'v2.29.1-0.20261012130337-71577268350e'
+        default: 'v2.30.0'
       code_analysis_tools:
         description: 'JSON array of analysis tools to run, a subset of ["go-vet","staticcheck","govulncheck","gosec"]. Trim it when a parallel golangci-lint workflow already covers vet and staticcheck.'
         required: false
