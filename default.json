@@ -168,6 +168,13 @@
       "automerge": true
     },
     {
+      "description": "Renovate itself publishes several releases a day, and the 7-day hold is a sliding window, so a new version matures on almost every run: the npm pin here (renovate-config-validator in actionlint.yml) merged 7 times in two days, each a push to master and so a deploy to every caller, and the image pin in forgejo-fleet-ops rewrote its branch on every run. One window a week, Monday 01:00-05:59 UTC (the preset sets no timezone), which the 04:15 and 04:45 Renovate runs land in. Its own group, so the window does not hold the rest of the batch back",
+      "matchPackageNames": ["renovate", "ghcr.io/renovatebot/renovate"],
+      "groupName": "renovate",
+      "groupSlug": "renovate",
+      "schedule": ["* 1-5 * * 1"]
+    },
+    {
       "description": "The Go analysis tool pins above are defaults every caller inherits the moment they merge, so they get their own PR instead of riding the batch. Both reusables repos gate it with a required canary check (canary.yml + scripts/canary.sh) that runs the old and the new version over every caller and goes red when the new one fails where the old one passes. Green means no caller breaks, so it automerges; red waits for a person",
       "matchManagers": ["custom.regex"],
       "matchDepNames": [
