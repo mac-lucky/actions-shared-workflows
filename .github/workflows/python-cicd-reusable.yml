@@ -295,8 +295,12 @@ jobs:
         if: ${{ inputs.use_uv && (matrix.tool == 'ruff-lint' || matrix.tool == 'ruff-format') }}
         working-directory: ${{ inputs.build_context }}
         run: |
-          if [ -f "pyproject.toml" ]; then
-            uv sync --frozen 2>/dev/null || uv sync
+          # --locked with a uv.lock: a lockfile out of step with pyproject.toml
+          # fails here instead of resolving fresh versions nobody reviewed.
+          if [ -f uv.lock ]; then
+            uv sync --locked
+          elif [ -f "pyproject.toml" ]; then
+            uv sync
           else
             echo "No pyproject.toml found, skipping dependency installation"
           fi
@@ -406,7 +410,8 @@ jobs:
         working-directory: ${{ inputs.build_context }}
         run: |
           if [ "${{ inputs.use_uv }}" = "true" ]; then
-            uv sync --frozen 2>/dev/null || uv sync
+            # Same as the lint install: a stale uv.lock fails, never re-resolves.
+            if [ -f uv.lock ]; then uv sync --locked; else uv sync; fi
           else
             pip install -r requirements.txt 2>/dev/null || pip install .
           fi
