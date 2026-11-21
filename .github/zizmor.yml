@@ -8,3 +8,9 @@ rules:
         # The reusables call this repo's own actions at @master on purpose:
         # a push to master is the fleet deploy.
         mac-lucky/*: any
+  # Online only. A pin's `# v7` comment names the major tag, which moves on
+  # every v7.x release while Renovate holds the new digest for its 7-day
+  # cooldown, so this fires most weeks for a pin that is correct. The online
+  # audits that matter here are impostor-commit and known-vulnerable-actions.
+  ref-version-mismatch:
+    disable: true
