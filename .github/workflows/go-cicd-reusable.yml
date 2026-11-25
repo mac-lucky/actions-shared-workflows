@@ -166,7 +166,7 @@ on:
         description: 'govulncheck version tag to install. Pins the binary, not the vulnerability database - that is still fetched at run time, so new CVEs still fail the job.'
         required: false
         type: string
-        default: 'v1.9.0'
+        default: 'v1.10.0'
       gosec_version:
         description: 'gosec version to install. A master pseudo-version until a gosec release reads Go 1.27 export data (v2.29.0 cannot); Renovate moves it to the next tag.'
         required: false
